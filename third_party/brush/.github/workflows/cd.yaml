@@ -1,0 +1,310 @@
+#
+# Based on https://github.com/release-plz/release-plz/blob/a5043c478d46d051c00e4fbc85036ac22510f07e/.github/workflows/cd.yml
+#
+# N.B. scripts/install/install.sh depends on details of this workflow: its path (attestations are
+# verified against it), the `brush-shell-v*` release tags, the `brush-<target>.tar.gz` and
+# `brush-<target>.sha256` asset names, the `brush` binary at the archive root, and the glibc
+# floor of the `*-linux-gnu` builds (2.34, set by the ubuntu-22.04 runners; the script picks the
+# gnu build only on glibc 2.34+ and the musl build otherwise). Changing any of these breaks the
+# install script for new releases; update it (and its tests) to match.
+#
+# Pushes to `main` also publish canary builds to ghcr.io/reubeno/brush-canary (see the
+# publish-canary job), which `install.sh --canary` installs from.
+#
+
+name: CD # Continuous Deployment
+run-name: CD${{ github.event_name == 'release' && ' (release)' || (github.event_name == 'push' && github.repository == 'reubeno/brush') && ' (canary)' || ' (dry run)' }}
+
+on:
+  release:
+    types: [published]
+
+  # Manual triggers don't actually publish but dry-run the builds.
+  workflow_dispatch: null
+
+  # Run on PR in dry-run mode to make sure this workflow is still generally
+  # working.
+  pull_request:
+    branches: ["main"]
+
+  # Run on pushes into `main` to publish canary builds.
+  push:
+    branches: ["main"]
+
+# Only allow one run of the workflow per branch / PR at a time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings
+  RUSTUP_MAX_RETRIES: 10
+
+defaults:
+  run:
+    shell: bash
+
+permissions: {}
+
+jobs:
+  upload-docs:
+    name: "Generate and upload documentation"
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'release' && github.repository_owner == 'reubeno' && startsWith(github.event.release.tag_name, 'brush-shell-v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install Rust toolchain"
+        run: rustup toolchain install --profile minimal
+
+      - name: "Generate documentation distribution"
+        run: cargo xtask gen docs dist --out brush-docs.tar.gz
+
+      - name: "Upload documentation to release"
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload ${GITHUB_RELEASE_TAG} \
+            brush-docs.tar.gz \
+            brush-docs.tar.gz.sha256 \
+            brush-docs.tar.gz.sha512
+
+      - name: "Generate artifact attestation"
+        if: github.event_name == 'release'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "brush-docs.tar.gz*"
+
+      - name: "Upload documentation artifact (dry-run)"
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: brush-docs
+          path: |
+            brush-docs.tar.gz
+            brush-docs.tar.gz.sha256
+            brush-docs.tar.gz.sha512
+
+  upload-assets:
+    name: ${{ matrix.target }}
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'release' && github.repository_owner == 'reubeno' && startsWith(github.event.release.tag_name, 'brush-shell-v'))
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Run all jobs to completion regardless of errors.
+      # This is useful because sometimes we fail to compile for a certain target.
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-pc-windows-msvc
+            os: windows-2025
+            force_dry_run: false
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            force_dry_run: false
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            force_dry_run: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            force_dry_run: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            force_dry_run: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            force_dry_run: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04
+            force_dry_run: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            force_dry_run: false
+    timeout-minutes: 60
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install Rust toolchain"
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+          # The cross ARM64 musl linker wrapper emits shell traces as linker warnings.
+          # See https://github.com/cross-rs/cross/issues/1618.
+          build-warnings: ${{ matrix.target == 'aarch64-unknown-linux-musl' && 'warn' || 'deny' }}
+
+      - name: "Setup cross-compiling toolchain"
+        if: startsWith(matrix.os, 'ubuntu') && !contains(matrix.target, '-musl')
+        uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1.42.0
+        with:
+          target: ${{ matrix.target }}
+
+      - name: "Install musl cross tools"
+        if: contains(matrix.target, '-musl')
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cross
+
+      - name: "Workaround: clean cache"
+        run: cargo clean
+
+      - name: "Install cargo-about"
+        run: cargo install cargo-about --locked --features cli
+
+      - name: "Generate license notices"
+        working-directory: brush-shell
+        run: cargo about generate -o ../THIRD_PARTY_LICENSES.html about.hbs
+
+      - name: "Update build flags"
+        if: endsWith(matrix.target, 'windows-msvc')
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+
+      - name: "Build and upload binaries to release"
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        id: upload-release
+        env:
+          # Canary builds of `main` say so in `brush --version`.
+          BRUSH_VERSION_SUFFIX: ${{ github.event_name == 'push' && '+canary' || '' }}
+          # cross only forwards environment variables it's told about into its build container.
+          CROSS_BUILD_ENV_PASSTHROUGH: BRUSH_VERSION_SUFFIX
+        with:
+          dry-run: ${{ github.event_name != 'release' || matrix.force_dry_run }}
+          bin: brush
+          locked: true
+          target: ${{ matrix.target }}
+          tar: unix
+          zip: windows
+          checksum: sha256,sha512
+          token: ${{ secrets.GITHUB_TOKEN }}
+          include: "LICENSE,THIRD_PARTY_LICENSES.html"
+
+      - name: "Generate artifact attestation"
+        # Canary builds (pushes to `main`) are attested too, for `install.sh --canary` to verify.
+        if: (github.event_name == 'release' && !matrix.force_dry_run) || (github.event_name == 'push' && github.repository == 'reubeno/brush')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "${{ steps.upload-release.outputs.archive }}.*"
+
+      - name: "Upload artifacts (dry-run)"
+        if: github.event_name != 'release' || matrix.force_dry_run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: brush-${{ matrix.target }}
+          path: "${{ steps.upload-release.outputs.archive }}.*"
+
+  # Publishes builds of `main` to ghcr.io/reubeno/brush-canary, where `install.sh --canary` finds
+  # them. Each target's archive is pushed as a single-file OCI artifact tagged `<target>-<commit>`
+  # and then, once every target's archive is in place, `<target>` (always the newest build).
+  #
+  # N.B. install.sh depends on the package name, the tags, and each manifest having the archive
+  # as its only layer. It also shows users the build's revision and created annotations.
+  publish-canary:
+    name: "Publish canary builds"
+    needs: upload-assets
+
+    permissions:
+      packages: write
+
+    if: github.event_name == 'push' && github.repository == 'reubeno/brush'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: "Download build artifacts"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          # brush-<target>, but not brush-docs.
+          pattern: brush-*-*
+          merge-multiple: true
+
+      - name: "Install ORAS"
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+
+      - name: "Push to ghcr.io"
+        env:
+          PACKAGE: ghcr.io/reubeno/brush-canary
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          oras login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${REGISTRY_TOKEN}"
+
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          targets=()
+          for archive in brush-*.tar.gz brush-*.zip; do
+            target="${archive#brush-}"
+            target="${target%.tar.gz}"
+            target="${target%.zip}"
+            case "${archive}" in
+              *.zip) media_type="application/zip" ;;
+              *) media_type="application/gzip" ;;
+            esac
+
+            oras push "${PACKAGE}:${target}-${GITHUB_SHA}" \
+              --artifact-type "application/vnd.reubeno.brush.canary.v1" \
+              --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --annotation "org.opencontainers.image.created=${created}" \
+              --annotation "org.opencontainers.image.description=Unreleased, unstable builds of brush from main." \
+              "${archive}:${media_type}"
+            targets+=("${target}")
+          done
+
+          # Only now move each `<target>` tag, so it never points at a partially published build.
+          for target in "${targets[@]}"; do
+            oras tag "${PACKAGE}:${target}-${GITHUB_SHA}" "${target}"
+          done
+
+  # Deletes old canary builds. Kept apart from publish-canary so that nothing here can push builds.
+  prune-canary:
+    name: "Prune old canary builds"
+    needs: publish-canary
+
+    permissions:
+      packages: write
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: "Delete all but the newest ~100 builds"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          versions="/users/${GITHUB_REPOSITORY_OWNER}/packages/container/brush-canary/versions"
+
+          # Each build adds one version per target (8 of them), so keeping the newest 800 versions
+          # keeps about 100 builds. Versions still tagged with a bare `<target>` (the newest build
+          # of that target) are never deleted.
+          gh api --paginate --slurp "${versions}?per_page=100" |
+            jq -r 'add | sort_by(.created_at) | reverse | .[800:][]
+                   | select(.metadata.container.tags | all(test("-[0-9a-f]{40}$")))
+                   | .id' |
+            while read -r id; do
+              # GitHub refuses to delete public versions with over 5,000 downloads; don't fail over that.
+              gh api --method DELETE "${versions}/${id}" || echo "::warning::could not delete ${versions}/${id}"
+            done

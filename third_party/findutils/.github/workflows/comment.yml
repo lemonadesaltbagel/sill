@@ -1,0 +1,93 @@
+on:
+  workflow_run:
+    workflows: [External-testsuites]
+    types: [completed]
+
+name: Comment Test results on the PR
+
+permissions: {}
+jobs:
+  upload-pr-comment:
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+
+    name: Upload PR comment
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+
+    steps:
+      - name: Download comparison artifacts
+        uses: actions/github-script@v9
+        with:
+          script: |
+            let fs = require('fs');
+            let artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: ${{ github.event.workflow_run.id }},
+            });
+
+            for (let wanted of ["comment-gnu", "comment-bfs"]) {
+              let match = artifacts.data.artifacts.find((a) => a.name === wanted);
+              if (!match) {
+                console.log(`Artifact ${wanted} not found`);
+                continue;
+              }
+              let download = await github.rest.actions.downloadArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: match.id,
+                archive_format: 'zip',
+              });
+              fs.writeFileSync(`${{ github.workspace }}/${wanted}.zip`, Buffer.from(download.data));
+            }
+
+      - name: Extract artifacts
+        run: |
+          for a in comment-gnu comment-bfs; do
+            if test -f "$a.zip"; then
+              mkdir -p "$a"
+              unzip -o "$a.zip" -d "$a" || echo "Failed to unzip $a.zip"
+            fi
+          done
+
+      - name: Comment on PR
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let fs = require('fs');
+
+            function read(path) {
+              try { return fs.readFileSync(path, 'utf8'); } catch (e) { return ''; }
+            }
+
+            // The PR number is written to NR by both jobs.
+            let nr = read('comment-gnu/NR').trim() || read('comment-bfs/NR').trim();
+            if (!nr) {
+              console.log('No PR number found; skipping comment');
+              return;
+            }
+
+            let gnu = read('comment-gnu/result-gnu.txt').trim();
+            let bfs = read('comment-bfs/result-bfs.txt').trim();
+
+            let sections = [];
+            if (gnu) sections.push('GNU findutils testsuite:\n```\n' + gnu + '\n```');
+            if (bfs) sections.push('bfs testsuite:\n```\n' + bfs + '\n```');
+
+            if (sections.length === 0) {
+              console.log('No test result changes; skipping comment');
+              return;
+            }
+
+            let body = 'Commit ${{ github.event.workflow_run.head_sha }} has test result changes:\n\n'
+              + sections.join('\n\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(nr),
+              body: body,
+            });

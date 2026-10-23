@@ -1,0 +1,15 @@
+name: "Builtins: PS4"
+cases:
+  - name: "PS4 expansion"
+    stdin: |
+      PS4='+$FUNCNAME '
+      bar() { true; }
+      foo() { set -x; bar; set +x; }
+      foo
+
+  - name: "PS4 does not perform brace expansion"
+    stdin: |
+      IFS=:
+      PS4='{a,b} '
+      set -x
+      :

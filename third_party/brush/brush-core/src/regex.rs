@@ -1,0 +1,277 @@
+#![allow(clippy::needless_pass_by_value)]
+
+use std::borrow::Cow;
+use std::cell::RefCell;
+
+use crate::error;
+use cached::Cached;
+
+/// Cache mapping a (pattern, case-insensitive, multiline) key to a compiled regex.
+type RegexCache = cached::LruCache<(String, bool, bool), fancy_regex::Regex>;
+
+thread_local! {
+    // Wrapped in `Option` so that if cache construction ever fails we gracefully
+    // degrade to compiling regexes uncached rather than panicking. (With a fixed
+    // positive `max_size` this always succeeds, but `build()` is fallible.)
+    static REGEX_CACHE: RefCell<Option<RegexCache>> =
+        RefCell::new(cached::LruCache::builder().max_size(64).build().ok());
+}
+
+/// Represents a piece of a regular expression.
+#[derive(Clone, Debug)]
+pub(crate) enum RegexPiece {
+    /// A pattern that should be interpreted as a regular expression.
+    Pattern(String),
+    /// A literal string that should be matched exactly.
+    Literal(String),
+}
+
+impl RegexPiece {
+    fn to_regex_str(&self) -> Cow<'_, str> {
+        match self {
+            Self::Pattern(s) => Cow::Borrowed(s.as_str()),
+            Self::Literal(s) => escape_literal_regex_piece(s.as_str()),
+        }
+    }
+}
+
+type RegexWord = Vec<RegexPiece>;
+
+/// Encapsulates a regular expression usable in the shell.
+#[derive(Clone, Debug)]
+pub struct Regex {
+    pieces: RegexWord,
+    case_insensitive: bool,
+    multiline: bool,
+}
+
+impl From<RegexWord> for Regex {
+    fn from(pieces: RegexWord) -> Self {
+        Self {
+            pieces,
+            case_insensitive: false,
+            multiline: false,
+        }
+    }
+}
+
+impl Regex {
+    /// Sets the regular expression's case sensitivity.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The new case sensitivity value.
+    pub const fn set_case_insensitive(mut self, value: bool) -> Self {
+        self.case_insensitive = value;
+        self
+    }
+
+    /// Enables (or disables) multiline support for this pattern: `.` then also matches
+    /// newline characters. `^` and `$` always anchor to the whole string, as in POSIX
+    /// regular expressions, which have no line anchors.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The new multiline value.
+    pub const fn set_multiline(mut self, value: bool) -> Self {
+        self.multiline = value;
+        self
+    }
+
+    /// Computes if the regular expression matches the given string.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The string to check for a match.
+    pub fn matches(&self, value: &str) -> Result<Option<Vec<Option<String>>>, error::Error> {
+        let regex_pattern: String = self
+            .pieces
+            .iter()
+            .map(|piece| piece.to_regex_str())
+            .collect();
+
+        let re = compile_regex(regex_pattern, self.case_insensitive, self.multiline)?;
+
+        Ok(re.captures(value)?.map(|captures| {
+            captures
+                .iter()
+                .map(|c| c.map(|m| m.as_str().to_owned()))
+                .collect()
+        }))
+    }
+}
+
+pub(crate) fn compile_regex(
+    regex_str: String,
+    case_insensitive: bool,
+    multiline: bool,
+) -> Result<fancy_regex::Regex, error::Error> {
+    // Move regex_str into the key to avoid cloning on cache-hit path.
+    let key = (regex_str, case_insensitive, multiline);
+
+    let cached_regex = REGEX_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .as_mut()
+            .and_then(|c| c.cache_get(&key).cloned())
+    });
+    if let Some(re) = cached_regex {
+        return Ok(re);
+    }
+
+    // Handle identified cases where a shell-supported regex isn't supported directly by
+    // `fancy_regex` -- specifically, adding missing escape characters.
+    let mut regex_str = add_missing_escape_chars_to_regex(key.0.as_str());
+
+    // Handle multiline enablement.
+    if multiline {
+        // The fancy_regex crate internally seems to have flags that can be used
+        // to enable multiline support, but they're not exposed via its
+        // RegexBuilder. We instead just prefix with the right flags.
+        let updated_str = std::format!("(?s){regex_str}");
+        regex_str = updated_str.into();
+    }
+
+    let mut builder = fancy_regex::RegexBuilder::new(regex_str.as_ref());
+    builder.case_insensitive(case_insensitive);
+
+    let re = match builder.build() {
+        Ok(re) => re,
+        Err(e) => return Err(error::ErrorKind::InvalidRegexError(e, regex_str.to_string()).into()),
+    };
+
+    // Release borrow on key.0 before moving key into cache_set.
+    drop(regex_str);
+
+    REGEX_CACHE.with(|cache| {
+        if let Some(c) = cache.borrow_mut().as_mut() {
+            c.cache_set(key, re.clone());
+        }
+    });
+
+    Ok(re)
+}
+
+fn add_missing_escape_chars_to_regex(s: &str) -> Cow<'_, str> {
+    // We may see a character class with an unescaped '[' (open bracket) character. We need
+    // to escape that character.
+    let mut in_escape = false;
+    let mut in_brackets = false;
+    // A ']' in the first member position of a bracket expression (immediately after the
+    // opening '[' or after the leading '^' that negates it) is a member of the
+    // expression, not its terminator.
+    let mut at_first_member = false;
+    let mut insertion_positions = vec![];
+
+    let mut peekable = s.char_indices().peekable();
+    while let Some((byte_offset, c)) = peekable.next() {
+        let next_is_colon = peekable.peek().is_some_and(|(_, c)| *c == ':');
+        let was_at_first_member = at_first_member;
+        at_first_member = false;
+
+        match c {
+            '[' if !in_escape && !in_brackets => {
+                in_brackets = true;
+                // A '^' here negates the expression; it isn't a member itself, so the
+                // first member position is the one after it. Any later '^' is an
+                // ordinary member.
+                let _ = peekable.next_if(|(_, c)| *c == '^');
+                at_first_member = true;
+            }
+            '[' if !in_escape && in_brackets && !next_is_colon => {
+                // Need to escape.
+                insertion_positions.push(byte_offset);
+            }
+            ']' if !in_escape && in_brackets && was_at_first_member => {
+                // `fancy_regex` doesn't implement the rule that this ']' is a member;
+                // escape it so it's a member there too, and so it can be the low end
+                // of a range (e.g. `[]-a]`).
+                insertion_positions.push(byte_offset);
+            }
+            ']' if !in_escape && in_brackets => {
+                in_brackets = false;
+            }
+            _ => (),
+        }
+
+        in_escape = !in_escape && c == '\\';
+    }
+
+    if insertion_positions.is_empty() {
+        return s.into();
+    }
+
+    let mut updated = s.to_owned();
+    for pos in insertion_positions.iter().rev() {
+        updated.insert(*pos, '\\');
+    }
+
+    updated.into()
+}
+
+fn escape_literal_regex_piece(s: &str) -> Cow<'_, str> {
+    let mut result = String::new();
+
+    for c in s.chars() {
+        match c {
+            c if regex_char_is_special(c) => {
+                result.push('\\');
+                result.push(c);
+            }
+            c => result.push(c),
+        }
+    }
+
+    result.into()
+}
+
+pub(crate) const fn regex_char_is_special(c: char) -> bool {
+    matches!(
+        c,
+        '\\' | '^' | '$' | '.' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_missing_escape_chars_to_regex() {
+        // Negative cases -- where we don't need to escape.
+        assert_eq!(add_missing_escape_chars_to_regex("a[b]"), "a[b]");
+        assert_eq!(add_missing_escape_chars_to_regex(r"a\[b\]"), r"a\[b\]");
+        assert_eq!(add_missing_escape_chars_to_regex(r"a[b\[]"), r"a[b\[]");
+
+        // Positive case -- where we need to escape.
+        assert_eq!(add_missing_escape_chars_to_regex(r"a[b[]"), r"a[b\[]");
+        assert_eq!(add_missing_escape_chars_to_regex(r"a[[]"), r"a[\[]");
+    }
+
+    #[test]
+    fn test_leading_close_bracket_in_bracket_expression() {
+        // A ']' in the first member position (after any '^') is a member of the bracket
+        // expression, not its terminator, so the expression is still open after it.
+        // It's escaped as well, since `fancy_regex` doesn't implement that rule; that
+        // also makes it the low end of a range in `[]-a]`, as it is in a shell pattern.
+        assert_eq!(add_missing_escape_chars_to_regex("[]]"), r"[\]]");
+        assert_eq!(add_missing_escape_chars_to_regex("[^]]"), r"[^\]]");
+        assert_eq!(add_missing_escape_chars_to_regex("[][]"), r"[\]\[]");
+        assert_eq!(add_missing_escape_chars_to_regex("[^][]"), r"[^\]\[]");
+        assert_eq!(add_missing_escape_chars_to_regex("[]a[]"), r"[\]a\[]");
+        assert_eq!(add_missing_escape_chars_to_regex("[]-a]"), r"[\]-a]");
+
+        // The rule only applies in the first member position: the ']' in `[a]` and the
+        // already-escaped one in `[\]]` both close their expressions.
+        assert_eq!(add_missing_escape_chars_to_regex("[a][]x]"), r"[a][\]x]");
+        assert_eq!(add_missing_escape_chars_to_regex(r"[\]][]x]"), r"[\]][\]x]");
+
+        // Only the '^' that negates the expression is skipped over; a later one is an
+        // ordinary member, so the ']' after it terminates the expression.
+        assert_eq!(add_missing_escape_chars_to_regex("[^^][ab]"), "[^^][ab]");
+        assert_eq!(add_missing_escape_chars_to_regex("[^^][b[]"), r"[^^][b\[]");
+
+        // A '^' outside a bracket expression doesn't open one.
+        assert_eq!(add_missing_escape_chars_to_regex("^[a[]"), r"^[a\[]");
+    }
+}

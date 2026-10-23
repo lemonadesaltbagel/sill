@@ -1,0 +1,829 @@
+name: "CI"
+on:
+  pull_request:
+    paths-ignore:
+      - "release-plz.toml"
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "LICENSE"
+      - "release-plz.toml"
+    branches:
+      - main
+
+env:
+  # Incremental compilation only pays off across repeated edit-build cycles.
+  # Each CI job builds once, so it would only add compile time and bloat
+  # target/. rust-cache sets this itself, but not every job here uses it.
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  CLICOLOR: 1
+  CLICOLOR_FORCE: 1
+
+permissions:
+  actions: read
+  contents: read
+
+# Only allow one run of the workflow per branch / PR at a time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build and upload release binaries for all relevant architectures.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Build for x86_64/linux target on native host.
+          # N.B. We intentionally pin to Ubuntu 22.04 for now to increase
+          # the range of distros that will be able to run the produced binaries.
+          # Newer release of Ubuntu upgrade glibc to a point not yet supported
+          # by some latest stable versions of distros.
+          - host: "ubuntu-22.04"
+            target: ""
+            cross_command: ""
+            cross_tool_to_install: ""
+            os: "linux"
+            arch: "x86_64"
+            binary_name: "brush"
+            extra_build_args: ""
+          # Build for x86_64/linux using musl as target C runtime.
+          # We don't bother pinning to an earlier version of Ubuntu because
+          # the produced binary will statically link the C runtime anyhow.
+          - host: "ubuntu-24.04"
+            target: "x86_64-unknown-linux-musl"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "linux-musl"
+            arch: "x86_64"
+            binary_name: "brush"
+            extra_build_args: ""
+          # Build for aarch64/macos target on native host.
+          - host: "macos-latest"
+            target: ""
+            cross_command: ""
+            cross_tool_to_install: ""
+            os: "macos"
+            arch: "aarch64"
+            required_tools: ""
+            binary_name: "brush"
+            extra_build_args: ""
+          # Build for aarch64/linux target on x86_64/Linux host.
+          - host: "ubuntu-24.04"
+            target: "aarch64-unknown-linux-gnu"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "linux"
+            arch: "aarch64"
+            required_tools: "gcc-aarch64-linux-gnu"
+            binary_name: "brush"
+            extra_build_args: ""
+          # Build for wasm32 target on x86_64/linux host.
+          - host: "ubuntu-24.04"
+            target: "wasm32-unknown-unknown"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "unknown"
+            arch: "wasm32"
+            required_tools: ""
+            binary_name: "brush.wasm"
+            extra_build_args: ""
+          # Build for WASI-0.3 target on x86_64/linux host. wasm32-wasip3 first
+          # ships prebuilt std in Rust 1.100; until rust-toolchain.toml is at
+          # 1.100+, use nightly. Drop `toolchain` once it is.
+          - host: "ubuntu-24.04"
+            target: "wasm32-wasip3"
+            cross_command: "cargo"
+            cross_tool_to_install: ""
+            os: "wasi-0.3"
+            arch: "wasm32"
+            required_tools: ""
+            binary_name: "brush.wasm"
+            extra_build_args: ""
+            toolchain: "nightly"
+          # Build for x86_64/windows target on x86_64/linux host.
+          - host: "ubuntu-24.04"
+            target: "x86_64-pc-windows-gnu"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "windows"
+            arch: "x86_64"
+            required_tools: ""
+            binary_name: "brush.exe"
+            extra_build_args: ""
+          # Build for x86_64/android target on x86_64/linux host.
+          - host: "ubuntu-24.04"
+            target: "x86_64-linux-android"
+            cross_command: "cargo ndk"
+            cross_tool_to_install: "cargo-ndk"
+            os: "android"
+            arch: "x86_64"
+            required_tools: ""
+            binary_name: "brush"
+            extra_build_args: ""
+          # x86_64/FreeBSD target on x86_64/linux host, via cross. Compile-check
+          # only (check_only): cross's curated sysroot omits some base-system
+          # libraries (libgeom/libkvm/...) that `sysinfo` links against, so the
+          # final link of a real binary fails. Checking still validates that the
+          # shell compiles for the target; producing a binary is a TODO (would
+          # need a full sysroot with those libraries present).
+          - host: "ubuntu-24.04"
+            target: "x86_64-unknown-freebsd"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "freebsd"
+            arch: "x86_64"
+            required_tools: ""
+            binary_name: "brush"
+            extra_build_args: ""
+            check_only: true
+          # x86_64/NetBSD target on x86_64/linux host, via cross. Compile-check
+          # only for the same reason as FreeBSD above.
+          - host: "ubuntu-24.04"
+            target: "x86_64-unknown-netbsd"
+            cross_command: "cross"
+            cross_tool_to_install: "cross"
+            os: "netbsd"
+            arch: "x86_64"
+            required_tools: ""
+            binary_name: "brush"
+            extra_build_args: ""
+            check_only: true
+          # OpenBSD is tier-3 with no prebuilt std, so even compile-checking it
+          # requires building std from source (-Zbuild-std, hence nightly +
+          # rust-src + no rustup target). panic_abort is built explicitly because
+          # our release profile sets panic = "abort" (plain -Zbuild-std only
+          # builds std + panic_unwind). Compile-check only, like the other BSDs;
+          # check links nothing, so no C cross-compiler/sysroot/linker is needed
+          # (none of the workspace's C-compiling deps are in this default graph).
+          - host: "ubuntu-24.04"
+            target: "x86_64-unknown-openbsd"
+            cross_command: "cargo"
+            cross_tool_to_install: ""
+            os: "openbsd"
+            arch: "x86_64"
+            required_tools: ""
+            binary_name: "brush"
+            extra_build_args: "-Zbuild-std=std,panic_abort"
+            toolchain: "nightly"
+            components: "rust-src"
+            # std is built from source, so there's no prebuilt target to install.
+            skip_rustup_target: true
+            check_only: true
+
+    name: "${{ matrix.check_only && 'Check' || 'Build' }} (${{ matrix.arch }}/${{ matrix.os }})"
+    runs-on: ${{ matrix.host }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up rust toolchain
+        shell: bash
+        env:
+          # Empty -- meaning the toolchain pinned in rust-toolchain.toml -- for
+          # every leg that doesn't set `toolchain` itself.
+          TOOLCHAIN: ${{ matrix.toolchain }}
+          TARGET: ${{ !matrix.skip_rustup_target && matrix.target || '' }}
+          COMPONENTS: ${{ matrix.components }}
+        run: |
+          if [[ -n "${TOOLCHAIN}" ]]; then
+            rustup toolchain install "${TOOLCHAIN}" --profile minimal
+            # A directory override takes precedence over rust-toolchain.toml.
+            rustup override set "${TOOLCHAIN}"
+          else
+            rustup toolchain install --profile minimal
+          fi
+          # Added separately: the nameless `rustup toolchain install` form
+          # (driven by rust-toolchain.toml) silently ignores --target and
+          # --component. These act on the now-active toolchain.
+          if [[ -n "${TARGET}" ]]; then rustup target add "${TARGET}"; fi
+          if [[ -n "${COMPONENTS}" ]]; then rustup component add "${COMPONENTS}"; fi
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: "${{ matrix.target }}"
+
+      - name: Install additional prerequisite tools
+        if: ${{ matrix.required_tools != '' }}
+        env:
+          REQUIRED_TOOLS: ${{ matrix.required_tools }}
+        run: sudo apt-get update -y && sudo apt-get install -y ${REQUIRED_TOOLS}
+
+      - name: Install cross-compilation toolchain
+        if: ${{ matrix.cross_tool_to_install != '' }}
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: ${{ matrix.cross_tool_to_install }}
+
+      - name: "Build (native)"
+        if: ${{ matrix.target == '' }}
+        env:
+          EXTRA_BUILD_ARGS: ${{ matrix.extra_build_args }}
+        run: cargo build --release --all-targets ${EXTRA_BUILD_ARGS}
+
+      - name: "${{ matrix.check_only && 'Check' || 'Build' }} (cross)"
+        if: ${{ matrix.target != '' }}
+        env:
+          CROSS_COMMAND: ${{ matrix.cross_command }}
+          CARGO_SUBCOMMAND: ${{ matrix.check_only && 'check' || 'build' }}
+          TARGET: ${{ matrix.target }}
+          EXTRA_BUILD_ARGS: ${{ matrix.extra_build_args }}
+          CARGO_NDK_PLATFORM: 24
+        run: ${CROSS_COMMAND} ${CARGO_SUBCOMMAND} --release --target=${TARGET} ${EXTRA_BUILD_ARGS}
+
+      - name: "Upload binaries"
+        # check_only targets don't produce a binary to upload.
+        if: ${{ !matrix.check_only }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.arch }}-${{ matrix.os }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+      - name: "Upload integration test binaries"
+        if: ${{ matrix.target == '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-tests-${{ matrix.arch }}-${{ matrix.os }}
+          path: |
+            target/${{ matrix.target }}/release/deps/brush_*_tests-*
+            !**/*.d
+
+  # Test functional correctness
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: "ubuntu-24.04"
+            variant: "linux-x86_64"
+            artifact_suffix: "linux-x86_64"
+            name_suffix: "(linux/x86_64)"
+            homebrew_supported: true
+            coverage: true
+            coverage_min_percent: 70
+
+          - host: "ubuntu-24.04-arm"
+            variant: "linux-aarch64"
+            artifact_suffix: "linux-aarch64"
+            name_suffix: "(linux/aarch64)"
+            homebrew_supported: false
+            coverage: true
+            coverage_min_percent: 70
+
+          - host: "macos-latest"
+            variant: "macos"
+            artifact_suffix: "-macos"
+            name_suffix: "(macOS)"
+            homebrew_supported: true
+            coverage: true
+            coverage_min_percent: 70
+
+          - host: "windows-2025"
+            variant: "windows"
+            artifact_suffix: "-windows"
+            name_suffix: "(windows)"
+            homebrew_supported: false
+            coverage: true
+            coverage_min_percent: 20
+
+          - host: "ubuntu-24.04"
+            variant: "wasi"
+            artifact_suffix: "-wasi"
+            name_suffix: "(wasm32/wasi-0.3)"
+            homebrew_supported: false
+            coverage: false
+            # See the wasm32-wasip3 build leg: nightly until Rust 1.100.
+            toolchain: "nightly"
+            extra_rust_targets: "wasm32-wasip3"
+            wasi_runtime: "wasmtime"
+            xtask_test_args: "--wasi"
+
+    name: "Test ${{ matrix.name_suffix }}"
+    runs-on: ${{ matrix.host }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up rust toolchain
+        env:
+          # Empty -- meaning the toolchain pinned in rust-toolchain.toml -- for
+          # every leg that doesn't set `toolchain` itself.
+          TOOLCHAIN: ${{ matrix.toolchain }}
+          TARGETS: ${{ matrix.extra_rust_targets }}
+        # Targets/components are added separately: the nameless
+        # `rustup toolchain install` form ignores --target and --component.
+        run: |
+          if [[ -n "${TOOLCHAIN}" ]]; then
+            rustup toolchain install "${TOOLCHAIN}" --profile minimal
+            # A directory override takes precedence over rust-toolchain.toml.
+            rustup override set "${TOOLCHAIN}"
+          else
+            rustup toolchain install --profile minimal
+          fi
+          rustup component add llvm-tools-preview
+          if [[ -n "${TARGETS}" ]]; then rustup target add "${TARGETS}"; fi
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-llvm-cov
+        if: ${{ matrix.coverage }}
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install WASI runtime
+        if: ${{ matrix.wasi_runtime }}
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: ${{ matrix.wasi_runtime }}
+
+      - name: Set up Homebrew
+        if: ${{ matrix.homebrew_supported }}
+        id: set-up-homebrew
+        # We ignore the stale-action-refs check because this action does not have any releases or tags.
+        # We're forced to pick a specific commit.
+        uses: Homebrew/actions/setup-homebrew@e99025eb970cfa124b8284a35463d87426917478 # zizmor: ignore[stale-action-refs]
+        with:
+          stable: true
+
+      - name: "Install recent bash for tests"
+        if: ${{ matrix.homebrew_supported }}
+        run: |
+          set -x
+
+          # Install it
+          brew install bash
+
+          # Find the path
+          BASH_PATH="$(brew --prefix bash)/bin/bash"
+
+          # Log what we're using
+          echo "Using bash from: ${BASH_PATH}"
+          echo "bash version:"
+          ${BASH_PATH} --version
+          echo "BASH_PATH=${BASH_PATH}">>$GITHUB_ENV
+
+      - name: "Download recent bash-completion sources for tests"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: "scop/bash-completion"
+          ref: "2.17.0"
+          path: "bash-completion"
+
+      - name: "Setup bash-completion"
+        run: echo "BASH_COMPLETION_PATH=${GITHUB_WORKSPACE}/bash-completion/bash_completion">>$GITHUB_ENV
+
+      - name: Test
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          args="${{ matrix.xtask_test_args || '' }}"
+          args="${args} --results-output ./test-results-${VARIANT}.xml"
+          if [[ "${{ matrix.coverage }}" == "true" ]]; then
+            args="${args} --coverage --coverage-output ./codecov-${VARIANT}.xml"
+          fi
+          cargo xtask test integration ${args}
+
+      - name: "Upload test results"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-reports${{ matrix.artifact_suffix }}
+          path: test-results-*.xml
+
+      - name: "Generate code coverage report"
+        uses: clearlyip/code-coverage-report-action@110af9d4ec87b6706f182fd90e3102af9e5203bf # v7.0.0
+        if: ${{ always() && matrix.coverage }}
+        id: "code_coverage_report"
+        with:
+          artifact_download_workflow_names: "CI"
+          artifact_name: coverage-%name%${{ matrix.artifact_suffix }}
+          filename: codecov-${{ matrix.variant }}.xml
+          overall_coverage_fail_threshold: ${{ matrix.coverage_min_percent }}
+          only_list_changed_files: ${{ github.event_name == 'pull_request' }}
+          fail_on_negative_difference: true
+          negative_difference_by: "overall"
+          negative_difference_threshold: 5
+
+      - name: "Upload code coverage report"
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codecov-reports${{ matrix.artifact_suffix }}
+          path: code-coverage-results.md
+
+  # Static analysis of the code.
+  check:
+    name: "Source code checks"
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        # Test the pinned toolchain as well as MSRV. The "stable" leg means the
+        # toolchain pinned in rust-toolchain.toml, which Dependabot keeps at the
+        # latest stable release; the label is kept so check names don't change.
+        rust-version: ["stable", "1.88.0"]
+        # Run checks on Linux, Windows, and macOS.
+        os: ["ubuntu-24.04", "windows-2025", "macos-latest"]
+        # Extra args for the build check, per toolchain. Spelled out for both
+        # legs so it's clear that stable compiles every crate in the workspace.
+        include:
+          - rust-version: "stable"
+            build_check_args: ""
+          # The application-tier crates declare a higher MSRV than the
+          # workspace-wide one, so they can't be built by the MSRV toolchain;
+          # see docs/reference/msrv-policy.md.
+          - rust-version: "1.88.0"
+            build_check_args: "--workspace-msrv"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up rust toolchain (${{ matrix.rust-version }})
+        shell: bash
+        env:
+          MSRV: ${{ matrix.rust-version != 'stable' && matrix.rust-version || '' }}
+        run: |
+          if [[ -n "${MSRV}" ]]; then
+            rustup toolchain install "${MSRV}" --profile minimal --component clippy,rustfmt
+            # A directory override takes precedence over rust-toolchain.toml.
+            rustup override set "${MSRV}"
+          else
+            rustup toolchain install --profile minimal
+          fi
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Format check
+        run: cargo xtask check fmt
+
+      - name: Check
+        run: cargo xtask check build ${{ matrix.build_check_args }}
+
+      - name: Clippy check
+        if: matrix.rust-version == 'stable'
+        run: cargo xtask check lint
+
+  # Check for unneeded dependencies.
+  check-deps:
+    name: "Check for unneeded dependencies"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Overriding (not just installing) nightly means xtask builds with it too,
+      # so the pinned toolchain doesn't have to be installed as well.
+      - name: Set up nightly rust toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup override set nightly
+
+      - name: Install cargo-udeps
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-udeps
+
+      - name: Check for unused dependencies
+        run: cargo xtask check unused-deps
+
+  # Check that generated schemas are up-to-date
+  check-schemas:
+    name: "Check generated schemas"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up rust toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Check generated schemas
+        run: cargo xtask check schemas
+
+  # Analyze public API surface
+  analyze-public-api:
+    if: github.event_name == 'pull_request'
+    name: "Analyze public API"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Overriding (not just installing) nightly means xtask builds with it too,
+      # so the pinned toolchain doesn't have to be installed as well.
+      - name: Set up nightly rust toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup override set nightly
+
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-public-api
+
+      - name: Set up branches
+        run: |
+          set -euo pipefail
+          git fetch origin main
+
+      - name: Compare public APIs with main
+        run: cargo xtask analyze public-api --base origin/main --output-dir reports
+
+      - name: Upload test report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-public-api
+          path: reports/*.md
+
+  # Performance analysis of the code.
+  benchmark:
+    if: github.event_name == 'pull_request'
+    name: "Benchmarks"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: pr
+
+      - name: Checkout main sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: main
+          ref: main
+
+      # main/ is built with its own pinned toolchain, which differs from the PR's
+      # only when the PR changes rust-toolchain.toml.
+      - name: Set up rust toolchain
+        run: rustup toolchain install --profile minimal
+        working-directory: pr
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            ./pr
+            ./main
+
+      # Criterion keeps past results under target/criterion by default, which the cargo cache
+      # saves; a later run on the branch then fails to load them as a baseline, and its errors
+      # break the bencher-format output. CRITERION_HOME keeps results out of the cache.
+      - name: Performance analysis on PR
+        run: cargo xtask analyze bench --output benchmarks.txt
+        working-directory: pr
+        env:
+          CRITERION_HOME: ${{ runner.temp }}/criterion-pr
+
+      - name: Performance analysis on main
+        run: cargo bench --workspace --benches -- --output-format bencher | tee benchmarks.txt
+        working-directory: main
+        env:
+          CRITERION_HOME: ${{ runner.temp }}/criterion-main
+
+      - name: Compare benchmark results
+        run: |
+          ./pr/scripts/compare-benchmark-results.py -b main/benchmarks.txt -t pr/benchmarks.txt >benchmark-results.md
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-reports
+          path: |
+            pr/benchmarks.txt
+            main/benchmarks.txt
+            benchmark-results.md
+
+  # Run real applications' own shell-integration suites (e2e/) against the release binary.
+  # The default adapter set plus bash-completion, which is report-only: its failures show as a pass
+  # rate in the dashboard without failing the job. blesh and bash-tests are opt-in (see
+  # e2e/README.md).
+  e2e-tests:
+    name: "External tests / e2e suites"
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download prebuilt brush binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: "binaries-x86_64-linux"
+          path: "binaries"
+
+      - name: Setup downloads
+        run: chmod +x binaries/*
+
+      - name: Set up rust toolchain
+        run: rustup toolchain install --profile minimal
+
+      - name: Enable cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Run e2e suites
+        run: |
+          cargo xtask test --brush-path "${GITHUB_WORKSPACE}/binaries/brush" \
+              e2e --with bash-completion --timeout 600 \
+              --results-dir e2e-results --summary-output e2e-results/dashboard.md
+
+      # The dashboard goes to the run page as well as the PR comment; failing adapters' logs go
+      # to the job log, so the comment stays short and the details are one click away.
+      - name: Publish dashboard
+        if: always()
+        run: |
+          dashboard=e2e-results/dashboard.md
+          [[ -f "${dashboard}" ]] || exit 0
+          # The blank line ends the last <details> block; without it the link stays raw HTML.
+          printf '\n📎 [Run logs](%s/%s/actions/runs/%s) · artifact `e2e-logs`\n' \
+              "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" >> "${dashboard}"
+          cat "${dashboard}" >> "${GITHUB_STEP_SUMMARY}"
+          cp "${dashboard}" test-results-e2e.md
+          for log in e2e-results/run-*/*/log.txt; do
+            app=$(basename "$(dirname "${log}")")
+            if grep -qE "^\| (❌|💥) \| ${app} \|" "${dashboard}"; then
+              echo "::group::${app} log.txt"
+              cat "${log}"
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload dashboard
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-e2e
+          path: test-results-e2e.md
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          path: e2e-results/
+          retention-days: 7
+
+  # Test release binary on a variety of OS platforms.
+  os-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # N.B. We don't include Ubuntu because it's already covered by the initial test job.
+          - container: "archlinux:latest"
+            description: "Arch Linux/latest"
+            prereqs_command: "pacman -Sy --noconfirm bash-completion iputils grep less sed util-linux which"
+
+          - container: "mcr.microsoft.com/azurelinux-beta/base/core:4.0"
+            description: "Azure Linux/4.0"
+            prereqs_command: "dnf install -y bash-completion ca-certificates git iputils grep less sed util-linux which"
+
+          - container: "debian:testing"
+            description: "Debian/testing"
+            prereqs_command: "apt-get update -y && apt-get install -y bash-completion bsdmainutils iputils-ping grep less sed which"
+
+          - container: "fedora:latest"
+            description: "Fedora/latest"
+            prereqs_command: "dnf install -y bash-completion iputils grep less sed util-linux which"
+
+          - container: "nixos/nix:latest"
+            description: "NixOS/latest"
+            prereqs_command: "nix --extra-experimental-features nix-command --extra-experimental-features flakes profile install nixpkgs#gnused nixpkgs#hexdump nixpkgs#bash-completion"
+
+          # NOTE: We use Tumbleweed to make sure we get a recent enough version of bash.
+          - container: "opensuse/tumbleweed:latest"
+            description: "openSUSE Tumbleweed/latest"
+            prereqs_command: "zypper install -y bash-completion git which"
+
+    name: "OS target tests (${{ matrix.description }})"
+    runs-on: ubuntu-24.04
+    # The floating tags in the matrix above are deliberate: the whole point of
+    # this job is to catch breakage against *current* distro releases, so
+    # digest-pinning these images would defeat it.
+    container: ${{ matrix.container }} # zizmor: ignore[unpinned-images]
+    needs: build
+    env:
+      # Reference: https://github.com/Azure/azure-cli/issues/29835
+      GNUPGHOME: /root/.gnupg
+    steps:
+      # Install prerequisites *first*; may need some of them for checkout itself.
+      - name: Install prerequisites
+        if: ${{ matrix.prereqs_command != '' }}
+        env:
+          PREREQS_COMMAND: ${{ matrix.prereqs_command }}
+        run: bash -c "${PREREQS_COMMAND}"
+
+      # Workaround path issues on NixOS
+      - name: "Apply workarounds: NixOS"
+        if: ${{ matrix.container == 'nixos/nix:latest' }}
+        run: |
+          set -x
+
+          # Allow use of experimental features to avoid nix from complaining.
+          export NIX_CONFIG="extra-experimental-features = nix-command flakes"
+
+          # The nixos/nix image ships no /etc/os-release (unlike a full NixOS install
+          # and every other container we test against). Provide one so the test harness
+          # can identify the OS, which it relies on for tests' `incompatible_os` tags.
+          printf 'NAME=NixOS\nID=nixos\nPRETTY_NAME="NixOS (nix container)"\n' > /etc/os-release
+
+          # Hacks to get the mounted nodejs by github actions work as it's dynamically linked
+          # https://github.com/actions/checkout/issues/334#issuecomment-716068696
+          nix build --no-link --max-jobs 2 --cores 0 'nixpkgs#stdenv.cc.cc.lib' 'nixpkgs#glibc'
+          echo "LD_LIBRARY_PATH=$(nix path-info 'nixpkgs#stdenv.cc.cc.lib')/lib" >> "$GITHUB_ENV"
+          ln -s "$(nix path-info 'nixpkgs#glibc' --recursive | grep glibc | grep -v bin)/lib64" /lib64
+
+          # Provide alternate path for bash-completion
+          echo "BASH_COMPLETION_PATH=$(nix path-info 'nixpkgs#bash-completion')/share/bash-completion/bash_completion">>"$GITHUB_ENV"
+
+          # Forcibly add system paths
+          echo "BRUSH_TEST_PATH_VAR=$PATH">>"$GITHUB_ENV"
+
+      # Checkout sources for YAML-based test cases
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: sources
+
+      - name: Download prebuilt brush binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries-x86_64-linux
+          path: binaries
+
+      - name: Download integration test binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: integration-tests-x86_64-linux
+          path: binaries
+
+      - name: Setup downloads
+        run: |
+          # N.B. Can't use -o pipefail because it's not supported on Debian.
+          set -eux
+          chmod +x binaries/*
+          ls -l -R sources/brush-shell/tests
+          ls -l binaries
+
+      - name: Run tests
+        shell: bash
+        run: |
+          export BRUSH_PATH=$PWD/binaries/brush
+          export BRUSH_VERBOSE=true
+
+          result=0
+          for test_name in binaries/*tests*; do
+            if [[ ${test_name} == *compat* ]]; then
+              export BRUSH_TEST_CASES=$PWD/sources/brush-shell/tests/cases/compat
+            elif [[ ${test_name} == *integration* ]]; then
+              export BRUSH_TEST_CASES=$PWD/sources/brush-shell/tests/cases/brush
+            elif [[ ${test_name} == *interactive* || ${test_name} == *version* ]]; then
+              # TODO(tests): Re-enable these tests.
+              echo "WARNING: skipping test: ${test_name}"
+              continue
+            fi
+
+            echo "Running test: ${test_name}"
+            chmod +x ${test_name}
+            ${test_name} || result=$?
+          done
+
+          exit ${result}

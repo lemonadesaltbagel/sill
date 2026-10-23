@@ -1,0 +1,293 @@
+name: "Well-known variable tests"
+cases:
+  - name: "Basic defaulted PATH var"
+    stdin: |
+      if [[ -z "$PATH" ]]; then
+        echo "PATH is not set or is empty"
+      else
+        echo "PATH is set and non-empty"
+      fi
+
+  - name: "Basic variables"
+    known_failure: true # Not fully implemented
+    stdin: |
+      declare -p > ./vars.txt
+      # Filter out variables set by test infrastructure.
+      # Filter out brush-specific variables.
+      cat vars.txt | grep '^declare ' | grep -v LLVM | grep -v BRUSH | sed -e 's/=.*//'
+      rm vars.txt
+
+  - name: "Static well-known variables"
+    stdin: |
+      echo "EUID: $EUID"
+      echo "UID: $UID"
+
+      [[ $BASHPID == $$ ]]
+      echo 'BASHPID == \$$: ' $?
+
+      [[ $BASH_ARGV0 == $0 ]]
+      echo 'BASH_ARGV0 == $0: ' $?
+
+      [[ $MACHTYPE == ${BASH_VERSINFO[5]} ]]
+      echo 'MACHTYPE == ${BASH_VERSINFO[5]: ' $?
+
+  - name: "OSTYPE pattern match for current platform"
+    stdin: |
+      case "$OSTYPE" in
+        linux*)           echo "prefix=linux" ;;
+        darwin*)          echo "prefix=darwin" ;;
+        freebsd*)         echo "prefix=freebsd" ;;
+        netbsd*)          echo "prefix=netbsd" ;;
+        openbsd*)         echo "prefix=openbsd" ;;
+        dragonfly*)       echo "prefix=dragonfly" ;;
+        solaris*)         echo "prefix=solaris" ;;
+        cygwin*|msys*|windows*)
+                          echo "prefix=windows-like" ;;
+        *)                echo "prefix=other:$OSTYPE" ;;
+      esac
+
+  - name: "dollar-_"
+    stdin: |
+      # Check on start
+      [[ "$0" == "$_" ]] && echo '$_ matches $0 on start'
+
+      # Now do something
+      echo first middle last >/dev/null
+      echo "\$_ after first echo command: $_"
+      echo
+      echo "\$_ after second echo command: $_"
+
+      # See if a child process sees _ set to its resolved pathname.
+      echo "Spawning child process..."
+      env -v | grep '^_='
+      echo "\$_ after child process exited: $_"
+
+  - name: "BASH_ALIASES"
+    stdin: |
+      echo "Initial BASH_ALIASES: " ${BASH_ALIASES[@]}
+      alias x=y
+      echo "Updated BASH_ALIASES: " ${BASH_ALIASES[@]}
+      unalias x
+      echo "Final BASH_ALIASES: " ${BASH_ALIASES[@]}
+
+  - name: "BASHOPTS"
+    min_oracle_version: "5.3" # Changed in bash 5.3
+    stdin: |
+      # Workaround for brush forcing on extglob
+      shopt -u extglob
+
+      echo "BASHOPTS: $BASHOPTS"
+
+  - name: "BASH_SOURCE"
+    max_oracle_version: "5.2" # Behavior changed in bash 5.3; still needs investigation
+    stdin: |
+      echo "Input entry"; declare -p BASH_SOURCE
+
+      function myfunc() {
+          echo "In function: \$1: $1"
+          declare -p BASH_SOURCE
+
+          if [[ $1 -gt 0 ]]; then
+              myfunc $(( $1 - 1 ))
+          fi
+      }
+
+      myfunc 4
+
+      echo "Input exit"; declare -p BASH_SOURCE
+
+  - name: "FUNCNAME"
+    stdin: |
+      echo "Input entry"; declare -p FUNCNAME
+
+      function myfunc() {
+          echo "In function: \$1: $1"
+          declare -p FUNCNAME
+
+          if [[ $1 -gt 0 ]]; then
+              myfunc $(( $1 - 1 ))
+          fi
+      }
+
+      myfunc 4
+
+      echo "Input exit"; declare -p FUNCNAME
+
+  # Regression test for https://github.com/reubeno/brush/issues/1212: BASH_ARGV
+  # and BASH_ARGC are populated for script-level frames (the top-level invocation
+  # plus sourced scripts) even without extended debugging mode. A sourced script
+  # invoked with no positional arguments contributes its own name.
+  - name: "BASH_ARGV/BASH_ARGC - sourced script without arguments"
+    test_files:
+      - path: "argv.sh"
+        contents: |
+          declare -p BASH_ARGV BASH_ARGC
+    stdin: |
+      . ./argv.sh
+
+  - name: "BASH_ARGV/BASH_ARGC - nested sourced scripts without arguments"
+    test_files:
+      - path: "outer.sh"
+        contents: |
+          . ./inner.sh
+      - path: "inner.sh"
+        contents: |
+          declare -p BASH_ARGV BASH_ARGC
+    stdin: |
+      . ./outer.sh
+
+  - name: "BASH_ARGV/BASH_ARGC - empty inside function without extdebug"
+    stdin: |
+      myfunc() {
+        declare -p BASH_ARGV BASH_ARGC
+      }
+      myfunc a b c
+
+  - name: "BASH_ARGV/BASH_ARGC - sourced script without arguments with extdebug"
+    test_files:
+      - path: "argv.sh"
+        contents: |
+          declare -p BASH_ARGV BASH_ARGC
+    stdin: |
+      shopt -s extdebug
+      . ./argv.sh
+
+  - name: "BASH_SUBSHELL"
+    stdin: |
+      echo "Initial BASH_SUBSHELL: $BASH_SUBSHELL"
+      (echo "Subshell BASH_SUBSHELL: $BASH_SUBSHELL")
+      (
+        ( echo "Nested subshell BASH_SUBSHELL: $BASH_SUBSHELL"  )
+      )
+
+      echo $(echo "Command substitution BASH_SUBSHELL: $BASH_SUBSHELL")
+
+  - name: "BASH_SUBSHELL counts a subshell in a pipeline stage once"
+    known_failure: true # TODO(pipeline): a subshell that is a pipeline stage counts as two levels
+    stdin: |
+      : | ( echo "last stage: $BASH_SUBSHELL" )
+      ( echo "first stage: $BASH_SUBSHELL" ) | cat
+      : | { echo "group stage: $BASH_SUBSHELL"; }
+      echo "substitution: $(: | ( echo $BASH_SUBSHELL ))"
+
+  - name: "BASH_VERSINFO"
+    stdin: |
+      shopt -s extglob
+
+      echo "len(BASH_VERSINFO): " ${#BASH_VERSINFO[@]}
+
+      # Only inspect the first 4 elements.
+      for ((i = 0; i < 4; i++)); do
+        cleaned=${BASH_VERSINFO[i]//+([0-9])/d}
+        echo "Cleaned BASH_VERSINFO[$i]: $cleaned"
+      done
+
+  - name: "BASH_VERSION"
+    stdin: |
+      shopt -s extglob
+
+      # Replace specific numbers with placeholder text.
+      cleaned=${BASH_VERSION//+([0-9])/d}
+      echo "Cleaned BASH_VERSION: $cleaned"
+
+  - name: "COMP_WORDBREAKS"
+    stdin: |
+      dump_var() {
+        echo -n "COMP_WORDBREAKS:"
+        for ((i=0; i<${#COMP_WORDBREAKS}; i++)); do
+          c="${COMP_WORDBREAKS:i:1}"
+          echo "  ${c@Q}"
+        done | sort
+      }
+
+      dump_var
+
+  - name: "EPOCHSECONDS"
+    stdin: |
+      external=$(date +%s)
+
+      es1=${EPOCHSECONDS}
+      [[ $es1 =~ ^[0-9]+$ ]] && echo "EPOCHSECONDS is a number"
+
+      es2=${EPOCHSECONDS}
+      [[ $es2 =~ ^[0-9]+$ ]] && echo "EPOCHSECONDS is still a number"
+
+      (( es1 >= external )) && echo "Time is moving forward"
+      (( es1 >= es2 )) && echo "Time is moving forward within the shell"
+
+  - name: "GROUPS"
+    skip: true # TODO(well-known-vars): macOS failure needs investigation (passes elsewhere)
+    stdin: |
+      (for group in ${GROUPS[@]}; do
+        echo $group
+      done) | sort
+
+  - name: "LINENO"
+    stdin: |
+      echo "LINENO: $LINENO"
+      echo "LINENO: $LINENO"
+      echo "LINENO: $LINENO"
+
+  - name: "LINENO with multi-line input"
+    stdin: |
+      for f in 1 2 3; do
+        echo "LINENO: $LINENO"
+      done
+
+  - name: "RANDOM"
+    stdin: |
+      first=${RANDOM}
+      second=${RANDOM}
+
+      [[ $first != $second ]] && echo "Confirmed RANDOM at least isn't static"
+      [[ $first -ge 0 && $first -lt 32768 ]] && echo "RANDOM value is within expected range"
+      [[ $second -ge 0 && $second -lt 32768 ]] && echo "RANDOM value is within expected range"
+
+  - name: "SHELL"
+    stdin: |
+      declare -p SHELL
+      echo "SHELL: $SHELL"
+
+  - name: "SHELLOPTS"
+    stdin: |
+      echo "SHELLOPTS: $SHELLOPTS"
+
+  - name: "SHLVL"
+    stdin: |
+      echo "SHLVL: $SHLVL"
+      bash -c 'echo "bash SHLVL: $SHLVL"'
+      $0 -c 'echo "nested SHLVL: $SHLVL"'
+
+  - name: "SRANDOM"
+    stdin: |
+      first=${SRANDOM}
+      second=${SRANDOM}
+
+      [[ $first != $second ]] && echo "Confirmed SRANDOM at least isn't static"
+
+  - name: "EPOCHREALTIME has fixed six-digit microsecond precision"
+    stdin: |
+      # Tools strip the dot and do integer math, so the fractional part must always be
+      # exactly six digits (like bash), regardless of trailing zeros.
+      for i in 1 2 3 4 5; do
+        [[ $EPOCHREALTIME =~ ^[0-9]+\.[0-9]{6}$ ]] || echo "bad format: $EPOCHREALTIME"
+      done
+      echo "done"
+
+  - name: "Appending to SECONDS adds to its value"
+    known_failure: true # appending to a dynamic variable does nothing
+    stdin: |
+      SECONDS+=100
+      echo "$((SECONDS >= 100))"
+      f() { echo "$((SECONDS >= 200))"; }
+      SECONDS+=100 f
+
+  - name: "BASH_SOURCE, BASH_LINENO, and BASH_ARGV can't be unset"
+    known_failure: true # TODO(variables): unset removes them with status 0
+    ignore_stderr: true
+    stdin: |
+      unset BASH_SOURCE; echo "BASH_SOURCE: $?"
+      unset BASH_LINENO; echo "BASH_LINENO: $?"
+      unset BASH_ARGV; echo "BASH_ARGV: $?"
+      unset FUNCNAME; echo "FUNCNAME: $?"
+

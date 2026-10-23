@@ -1,0 +1,214 @@
+name: "Builtins: mapfile"
+cases:
+  #
+  # Basic functionality
+  #
+  - name: "mapfile basic"
+    stdin: |
+      mapfile arr < <(echo -e "a\nb\nc")
+      declare -p arr
+
+  - name: "mapfile -t"
+    stdin: |
+      mapfile -t arr < <(echo -e "a\nb\nc")
+      declare -p arr
+
+  - name: "readarray -t"
+    stdin: |
+      readarray -t arr < <(echo -e "a\nb\nc")
+      declare -p arr
+
+  - name: "mapfile default MAPFILE"
+    stdin: |
+      mapfile -t < <(echo -e "a\nb")
+      declare -p MAPFILE
+
+  #
+  # -O flag
+  #
+  - name: "mapfile -O starts at offset"
+    stdin: |
+      mapfile -t -O 3 arr < <(echo -e "a\nb\nc")
+      declare -p arr
+
+  - name: "mapfile -O 0 preserves existing"
+    stdin: |
+      arr=(x y z w)
+      mapfile -t -O 0 arr < <(echo -e "a\nb")
+      declare -p arr
+
+  - name: "mapfile without -O clears existing"
+    stdin: |
+      arr=(x y z w)
+      mapfile -t arr < <(echo -e "a\nb")
+      declare -p arr
+
+  - name: "mapfile -O preserves sparse array"
+    stdin: |
+      declare -a arr
+      arr[0]=x
+      arr[5]=y
+      arr[10]=z
+      mapfile -t -O 2 arr < <(echo -e "a\nb")
+      declare -p arr
+
+  - name: "mapfile -O large offset"
+    stdin: |
+      mapfile -t -O 100 arr < <(echo -e "a\nb")
+      declare -p arr
+
+  - name: "mapfile -O negative"
+    ignore_stderr: true
+    stdin: |
+      mapfile -O -1 arr < /dev/null
+      echo "exit: $?"
+
+  #
+  # Variable state edge cases
+  #
+  - name: "mapfile into nonexistent variable"
+    stdin: |
+      mapfile -t newvar < <(echo -e "a\nb")
+      declare -p newvar
+
+  - name: "mapfile into string variable"
+    stdin: |
+      myvar="hello"
+      mapfile -t myvar < <(echo -e "a\nb")
+      declare -p myvar
+
+  - name: "mapfile -O into string variable"
+    stdin: |
+      myvar="hello"
+      mapfile -t -O 2 myvar < <(echo -e "a\nb")
+      declare -p myvar
+
+  - name: "mapfile into associative array"
+    ignore_stderr: true
+    stdin: |
+      declare -A myassoc
+      mapfile -t myassoc < <(echo -e "a\nb")
+      echo "exit: $?"
+
+  #
+  # -d delimiter
+  #
+  - name: "mapfile -d custom delimiter"
+    stdin: |
+      mapfile -t -d 'Z' arr < <(echo -ne "helloZthereZgeneralZkenobi")
+      declare -p arr
+
+  - name: "mapfile -d empty string (NUL)"
+    stdin: |
+      mapfile -t -d '' arr < <(printf 'a\0b\0c')
+      declare -p arr
+
+  #
+  # -n count
+  #
+  - name: "mapfile -n limits count"
+    stdin: |
+      mapfile -t -n 2 arr < <(echo -e "a\nb\nc\nd")
+      declare -p arr
+
+  - name: "mapfile -n 0 no limit"
+    stdin: |
+      mapfile -t -n 0 arr < <(echo -e "a\nb\nc")
+      declare -p arr
+
+  #
+  # -s skip
+  #
+  - name: "mapfile -s"
+    stdin: |
+      mapfile -t -s 2 arr < <(echo -e "a\nb\nc\nd")
+      declare -p arr
+
+  - name: "mapfile -s with -n"
+    stdin: |
+      mapfile -t -s 1 -n 2 arr < <(echo -e "a\nb\nc\nd\ne")
+      declare -p arr
+
+  #
+  # -u file descriptor
+  #
+  - name: "mapfile -u reads from fd"
+    stdin: |
+      exec 3< <(echo -e "a\nb\nc")
+      mapfile -t -u 3 arr
+      exec 3<&-
+      declare -p arr
+
+  - name: "mapfile -u invalid fd"
+    ignore_stderr: true
+    stdin: |
+      mapfile -u 99 arr
+      echo "exit: $?"
+
+  #
+  # Combinations
+  #
+  - name: "mapfile -O with -s and -n"
+    stdin: |
+      mapfile -t -O 10 -s 1 -n 2 arr < <(echo -e "a\nb\nc\nd\ne")
+      declare -p arr
+
+  - name: "mapfile multiple invocations without -O"
+    stdin: |
+      mapfile -t arr < <(echo -e "a\nb")
+      mapfile -t arr < <(echo -e "x\ny\nz")
+      declare -p arr
+
+  - name: "mapfile multiple invocations with -O"
+    stdin: |
+      mapfile -t arr < <(echo -e "a\nb")
+      mapfile -t -O 2 arr < <(echo -e "x\ny\nz")
+      declare -p arr
+
+  #
+  # Empty input
+  #
+  - name: "mapfile empty input"
+    stdin: |
+      mapfile -t arr < /dev/null
+      declare -p arr 2>/dev/null || echo "arr not set"
+
+  - name: "mapfile empty input clears existing"
+    stdin: |
+      arr=(x y z)
+      mapfile -t arr < /dev/null
+      declare -p arr 2>/dev/null || echo "arr not set"
+
+  - name: "mapfile -O empty input preserves"
+    stdin: |
+      arr=(x y z)
+      mapfile -t -O 0 arr < /dev/null
+      declare -p arr
+
+  - name: "mapfile into nameref variable"
+    known_failure: true
+    stdin: |
+      declare -a target
+      declare -n ref=target
+      mapfile -t ref < <(echo -e "a\nb\nc")
+      declare -p target
+
+  - name: "mapfile -O into nameref variable"
+    known_failure: true
+    stdin: |
+      target=(x y)
+      declare -n ref=target
+      mapfile -t -O 2 ref < <(echo -e "a\nb")
+      declare -p target
+
+  # Sent by another program, so that it reaches the shell through the kernel; nothing is ever
+  # written to the FIFO, so the read ends only if the signal ends it.
+  - name: "A signal that ends the shell ends a mapfile waiting for input"
+    known_failure: true # TODO(signals): signals aren't delivered to the shell
+    timeout_in_seconds: 5
+    stdin: |
+      mkfifo p; exec 3<>p
+      trap 'echo exit-trap' EXIT
+      ( sleep 0.2; /bin/kill -TERM $$ ) &
+      mapfile -t -n 1 a <&3
+      echo "not reached"

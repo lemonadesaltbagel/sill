@@ -1,0 +1,228 @@
+name: "Builtins: export"
+cases:
+  - name: "Basic export usage"
+    stdin: |
+      MY_TEST_VAR="value"
+      echo "Looking for unexported variable..."
+      env | grep MY_TEST_VAR
+
+      echo "Exporting and looking for it again..."
+      export MY_TEST_VAR
+      env | grep MY_TEST_VAR
+
+      echo "Exporting with new value..."
+      export MY_TEST_VAR="changed value"
+      env | grep MY_TEST_VAR
+
+  - name: "Exporting array"
+    stdin: |
+      export arr=(a 1 2)
+      declare -p arr
+
+  - name: "Export scalar assignment with parameter expansion"
+    stdin: |
+      value=hello
+      export result="$value world"
+      echo "$result"
+
+  - name: "Export scalar assignment with command substitution"
+    stdin: |
+      export result=$(printf hello)
+      echo "$result"
+
+  - name: "Export structured assignment does not recursively expand its value"
+    stdin: |
+      source='$(printf expanded)'
+      export result=$source
+      declare -p result
+
+  - name: "Export generated assignment does not expand its value again"
+    known_failure: true # TODO: export improvements required
+    stdin: |
+      assignment='result=$(printf expanded)'
+      export "$assignment"
+      declare -p result
+
+  - name: "Export indexed array with arithmetic key"
+    known_failure: true # TODO: export improvements required
+    stdin: |
+      export arr=([2+2]=value)
+      declare -p arr
+
+  - name: "Export associative array with expanded key"
+    stdin: |
+      declare -A map
+      key="space key"
+      export map=([$key]=value)
+      declare -p map
+
+  - name: "Unexporting variable"
+    stdin: |
+      MY_TEST_VAR="value"
+      export MY_TEST_VAR="value"
+      export -n MY_TEST_VAR
+
+      env | grep MY_TEST_VAR
+
+  - name: "Export with assignment through nameref"
+    known_failure: true
+    stdin: |
+      declare -n ref=MY_EXPORT_VAR
+      export ref="exported_value"
+      echo "MY_EXPORT_VAR: $MY_EXPORT_VAR"
+      env | grep MY_EXPORT_VAR
+
+  - name: "Export append to existing variable"
+    stdin: |
+      MYVAR="-O3 -pipe"
+      export MYVAR+=" -Wno-foo"
+      echo "MYVAR: $MYVAR"
+
+  - name: "Export append to already-exported variable"
+    stdin: |
+      export MYVAR="-O3 -pipe"
+      export MYVAR+=" -Wno-baz"
+      echo "MYVAR: $MYVAR"
+
+  - name: "Export append to unset variable"
+    stdin: |
+      export MYVAR+="first"
+      echo "MYVAR: $MYVAR"
+
+  - name: "Multiple export operands expand before assignments are applied"
+    stdin: |
+      unset first second
+      export first=one second=$first
+      declare -p first second
+
+  - name: "Export command substitutions expand left to right exactly once"
+    stdin: |
+      marker=marker.txt
+      : > "$marker"
+      export first=$(printf one; printf x >> "$marker") second=$(read -r contents < "$marker"; printf %s "$contents")
+      declare -p first second
+      read -r contents < "$marker"
+      echo "marker: $contents"
+
+  - name: "Export expansion error occurs before any operand is applied"
+    known_failure: true # Requires EXIT traps to fire at subshell exit; brush only runs them
+                        # when the top-level shell exits, so the trap below never observes the state.
+    stdin: |
+      state=state.txt
+      : > "$state"
+      (trap 'declare -p first > "$state" 2>/dev/null || printf unset > "$state"' EXIT; set -u; export first=one second=$missing) 2>/dev/null
+      echo "status: $?"
+      read -r contents < "$state"
+      echo "state: ${contents:-empty}"
+
+  - name: "Disabled export uses ordinary argument expansion"
+    stdin: |
+      enable -n export
+      value=world
+      export disabled=$value 2>/dev/null
+      echo "status: $?"
+      enable export
+      declare -p disabled 2>/dev/null || echo unset
+
+  #
+  # Regression coverage: expansion, tracing, and `$_` for operands that arrive already expanded.
+  #
+  - name: "Temporary environment is not visible to an export operand"
+    stdin: |
+      unset FOO
+      FOO=fromprefix export y=$FOO
+      declare -p y
+
+  - name: "Redirections do not apply to an export operand's command substitution"
+    stdin: |
+      export w=$(echo to-stderr >&2; echo val) 2>/dev/null
+      declare -p w
+
+  - name: "Unset variable in an export operand is fatal under set -u"
+    ignore_stderr: true
+    stdin: |
+      ( set -u; export x=$undefined; echo "NOT REACHED" )
+      echo "status: $?"
+
+  - name: "Function shadowing export receives its arguments"
+    stdin: |
+      export() { echo "shadow export: [$*] count=$#"; }
+      export y=2
+      unset -f export
+
+  - name: "Export rejects an array element target"
+    known_failure: true # TODO: export improvements required
+    ignore_stderr: true
+    stdin: |
+      export 'ea[0]=1'
+      echo "status: $?"
+
+  - name: "Export recognizes an assignment produced through command"
+    known_failure: true # TODO: export improvements required
+    stdin: |
+      value=world
+      command export wrapped=$value
+      declare -p wrapped
+
+  - name: "export rejects dash-prefixed operands after a name"
+    known_failure: true # TODO(export): a -x after a name is taken as an option, not rejected as an invalid identifier
+    stdin: |
+      strip() { sed -E 's/^[^ ]*: line [0-9]+: //'; }
+      { export v -x; echo "export v -x: $?"; } 2>&1 | strip
+      { export -- -x; echo "export -- -x: $?"; } 2>&1 | strip
+      { export w=1 +r; echo "export w=1 +r: $?"; } 2>&1 | strip
+
+  - name: "Usage error in a special builtin is fatal in POSIX mode"
+    known_failure: true # TODO(posix): a special builtin's usage error doesn't end a non-interactive POSIX shell
+    ignore_stderr: true
+    stdin: |
+      set -o posix
+      export --bogus
+      echo "not reached"
+
+  - name: "Usage error in a special builtin is not fatal outside POSIX mode"
+    ignore_stderr: true
+    stdin: |
+      export --bogus
+      echo "still running: $?"
+
+  - name: "export --help prints help on stdout"
+    known_failure: true # TODO(export): --help prints on stderr
+    stdin: |
+      export --help >/dev/null 2>&1; echo "rc=$?"
+      [[ -n $(export --help 2>/dev/null) ]] && echo "help on stdout"
+
+
+  - name: "export --help is fatal in POSIX mode"
+    known_failure: true # TODO(posix): a special builtin's --help doesn't end a non-interactive POSIX shell
+    stdin: |
+      set -o posix
+      export --help >/dev/null
+      echo "still running: $?"
+
+  - name: "export -f of a missing function"
+    known_failure: true # TODO(export): fails with status 2, without attribution, where bash fails with 1
+    stdin: |
+      strip() { sed -E 's/\x1b\[[0-9;]*m//g; s/^[^ ]*: line [0-9]+: //; s/^error: //'; }
+      export -f nofunc 2>&1 | strip
+      echo "export: ${PIPESTATUS[0]}"
+
+  - name: "export reports a readonly variable and goes on"
+    known_failure: true # TODO(export): stops at a readonly variable instead of going on to the next operand
+    ignore_stderr: true
+    stdin: |
+      readonly r=1
+      export r=2 y=3
+      echo "export: $? r=$r y=$y"
+      readonly r=4 z=5
+      echo "readonly: $? r=$r z=$z"
+      unset r w
+      echo "unset: $? r=$r"
+
+  - name: "export rejects a name that isn't an identifier"
+    known_failure: true # TODO(export): names that aren't identifiers are accepted with status 0
+    ignore_stderr: true
+    stdin: |
+      export "a b=1"; echo "a b=1: $?"
+      export 1x=2; echo "1x=2: $?"
+      export "a-b"; echo "a-b: $?"

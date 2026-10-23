@@ -1,0 +1,17 @@
+name: "Builtins: umask"
+cases:
+  - name: "umask with an out-of-range mode fails with status 1"
+    known_failure: true # TODO(umask): fails as unimplemented (99) or with status 2, where bash fails with 1
+    ignore_stderr: true
+    stdin: |
+      umask 999
+      echo "umask: $?"
+
+  - name: "umask in a subshell stays there"
+    known_failure: true # TODO(umask): a subshell runs in the shell's own process, so its umask is the shell's
+    stdin: |
+      umask 022
+      ( umask 077 )
+      echo "after a subshell: $(umask)"
+      umask 077 | true
+      echo "after a pipeline stage: $(umask)"

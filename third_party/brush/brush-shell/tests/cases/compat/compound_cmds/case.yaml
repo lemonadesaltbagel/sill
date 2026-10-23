@@ -1,0 +1,185 @@
+name: "Compound commands: case"
+cases:
+  - name: "Basic case statement with double semi"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          case x in
+          x) echo hi;;
+          esac
+    args: ["./script.sh"]
+
+  - name: "Basic catch-all pattern against multi-line input"
+    stdin: |
+      case "$(echo hi; echo there)" in
+      "not-it") echo "did not work" ;;
+      *) echo "caught it" ;;
+      esac
+
+  - name: "One-line case statement with double semi"
+    stdin: |
+      case x in x) echo "hi";; esac
+
+  - name: "Interesting characters in cases"
+    stdin: |
+      case "{" in
+      {) echo "curly brace" ;;
+      *) echo "unhandled case" ;;
+      esac
+
+  - name: "Case with case insensitive pattern"
+    stdin: |
+      shopt -s nocasematch
+      case "A" in
+      a) echo "matched" ;;
+      *) echo "did not match" ;;
+      esac
+
+  - name: "Interesting patterns in cases"
+    stdin: |
+      for word in "-a" "!b" "*c" "(d" "{e" ":f" "'g"; do
+        case "${word}" in
+        \!*) echo "starts with exclamation" ;;
+        -*)  echo "starts with hyphen" ;;
+        \**) echo "starts with asterisk" ;;
+        \(*) echo "starts with open parenthesis" ;;
+        \{*) echo "starts with open curly brace" ;;
+        :*)  echo "starts with colon" ;;
+        \'*) echo "starts with single quote" ;;
+        *)   echo "unhandled case" ;;
+        esac
+      done
+
+  - name: "Empty case"
+    stdin: |
+      myfunc() {
+        case abc in
+          *b*) ;;
+          *) return 33;;
+        esac
+
+        echo "Dropped out"
+      }
+
+      myfunc
+
+  - name: "Case with non-dsemi"
+    stdin: |
+      case "b" in
+      a) echo "a";;
+      b) echo "b"
+      esac
+
+  - name: "Case with fall-through"
+    stdin: |
+      case "b" in
+      a) echo "a";;
+      b) echo "b";&
+      c) echo "c";;
+      d) echo "d";;
+      esac
+
+  - name: "Case with resuming switch"
+    stdin: |
+      case "b" in
+      a) echo "a";;
+      b) echo "b";;&
+      c) echo "c";;
+      *) echo "*";;
+      d) echo "d";;
+      esac
+
+  - name: "Case status values"
+    stdin: |
+      function yield() {
+        return $1
+      }
+
+      case "a" in
+      x) yield 10;;
+      a) yield 11;;
+      b) yield 12;;
+      esac
+      echo "1: $?"
+
+      case "a" in
+      b) yield 10;;
+      c) yield 11;;
+      esac
+      echo "2: $?"
+
+      case "a" in
+      a) yield 10;&
+      b) yield 11;;
+      c) yield 12;;
+      esac
+      echo "3: $?"
+
+      case "a" in
+      a) yield 10;;&
+      *) yield 11;;
+      x) yield 12;;
+      esac
+      echo "4: $?"
+
+  - name: "Case with reserved words"
+    stdin: |
+      case case in
+      case) echo "saw case";;
+      esac
+
+  - name: "Case with return in function"
+    stdin: |
+      f() {
+        case "a" in
+        a) echo "matched a"; return 42;;
+        b) echo "matched b";;
+        esac
+        echo "After case"
+      }
+      f
+      echo "Exit code: $?"
+
+  - name: "Case with exit"
+    stdin: |
+      case "a" in
+      a) echo "matched a"; exit 42;;
+      b) echo "matched b";;
+      esac
+      echo "After case"
+
+  - name: "Case with break in loop"
+    stdin: |
+      for i in 1 2 3; do
+        case "$i" in
+        1) echo "one";;
+        2) echo "two"; break;;
+        3) echo "three";;
+        esac
+        echo "After case iteration $i"
+      done
+      echo "After loop"
+
+  - name: "Case with continue in loop"
+    stdin: |
+      for i in 1 2 3; do
+        case "$i" in
+        1) echo "one";;
+        2) echo "two"; continue;;
+        3) echo "three";;
+        esac
+        echo "After case iteration $i"
+      done
+      echo "After loop"
+
+  - name: "Case with return and fall-through"
+    stdin: |
+      f() {
+        case "a" in
+        a) echo "matched a"; return 42;&
+        b) echo "matched b";;
+        esac
+        echo "After case"
+      }
+      f
+      echo "Exit code: $?"

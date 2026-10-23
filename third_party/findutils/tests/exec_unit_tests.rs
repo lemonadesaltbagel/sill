@@ -1,0 +1,518 @@
+// Copyright 2017 Google Inc.
+//
+// Use of this source code is governed by a MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
+/// ! This file contains what would be normally be unit tests for `find::matchers::exec`.
+/// ! But as the tests require running an external executable, they need to be run
+/// ! as integration tests so we can ensure that our testing-commandline binary
+/// ! has been built.
+use std::env;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use tempfile::Builder;
+
+use common::test_helpers::{
+    fix_up_slashes, get_dir_entry_for, path_to_testing_commandline, FakeDependencies,
+};
+use findutils::find::matchers::exec::{MultiExecMatcher, SingleExecMatcher};
+use findutils::find::matchers::{Matcher, MatcherIO};
+
+mod common;
+
+#[test]
+fn matching_executes_code() {
+    let temp_dir = Builder::new()
+        .prefix("matching_executes_code")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        false,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\ntest_data/simple/abbbc\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn matching_executes_code_in_files_directory() {
+    let temp_dir = Builder::new()
+        .prefix("matching_executes_code_in_files_directory")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}/test_data/simple\nargs=\nabc\n./abbbc\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn matching_embedded_filename() {
+    let temp_dir = Builder::new()
+        .prefix("matching_embedded_filename")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc{}x{}yz"],
+        false,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabctest_data/simple/abbbcxtest_data/simple/abbbcyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+/// Running "find . -execdir whatever \;" failed with a No such file or directory error.
+/// It's now fixed, and this is a regression test to check that it stays fixed.
+fn execdir_in_current_directory() {
+    let temp_dir = Builder::new()
+        .prefix("execdir_in_current_directory")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let current_dir_entry = get_dir_entry_for(".", "");
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&current_dir_entry, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\n./.\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+/// Regression test for "find / -execdir whatever \;"
+fn execdir_in_root_directory() {
+    let temp_dir = Builder::new()
+        .prefix("execdir_in_root_directory")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let cwd = env::current_dir().expect("no current directory");
+    let root_dir = cwd
+        .ancestors()
+        .last()
+        .expect("current directory has no root");
+    let root_dir_entry = get_dir_entry_for(root_dir.to_str().unwrap(), "");
+
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&root_dir_entry, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\n{}\nxyz\n",
+            root_dir.to_string_lossy(),
+            root_dir.to_string_lossy(),
+        ))
+    );
+}
+
+#[test]
+fn matching_fails_if_executable_fails() {
+    let temp_dir = Builder::new()
+        .prefix("matching_fails_if_executable_fails")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[
+            temp_dir_path.as_ref(),
+            "--exit_with_failure",
+            "abc",
+            "{}",
+            "xyz",
+        ],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(!matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}/test_data/simple\nargs=\n--exit_with_failure\nabc\n.\
+             /abbbc\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn placeholder_in_utility_name() {
+    let temp_dir = Builder::new()
+        .prefix("placeholder_in_utility_name")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    // To exercise `{}` in the utility-name position we make the matched entry
+    // *be* the testing-commandline binary, then pass `{}` as the executable.
+    // The placeholder must be replaced with the entry's path and executed --
+    // this is exactly the behavior that regressed in #614, where the literal
+    // string "{}" was handed to Command::new and the command failed to run.
+    let testing_commandline = path_to_testing_commandline();
+    let binary_path = Path::new(&testing_commandline);
+    let root = binary_path
+        .parent()
+        .expect("testing-commandline has no parent directory")
+        .to_string_lossy();
+    let binary_name = binary_path
+        .file_name()
+        .expect("testing-commandline has no file name")
+        .to_string_lossy();
+    let entry = get_dir_entry_for(&root, &binary_name);
+
+    let matcher = SingleExecMatcher::new("{}", &[temp_dir_path.as_ref(), "executed"], false)
+        .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(
+        matcher.matches(&entry, &mut deps.new_matcher_io()),
+        "matcher should resolve {{}} to the binary path and run it"
+    );
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nexecuted\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn matching_multi_executes_code() {
+    let temp_dir = Builder::new()
+        .prefix("matching_executes_code")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = MultiExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc"],
+        false,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    let mut matcher_io = MatcherIO::new(&deps);
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+    matcher.finished(&mut matcher_io);
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\ntest_data/simple/abbbc\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn execdir_multi_in_current_directory() {
+    let temp_dir = Builder::new()
+        .prefix("execdir_in_current_directory")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let current_dir_entry = get_dir_entry_for(".", "");
+    let matcher = MultiExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc"],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    let mut matcher_io = MatcherIO::new(&deps);
+    assert!(matcher.matches(&current_dir_entry, &mut deps.new_matcher_io()));
+    matcher.finished_dir(Path::new(""), &mut matcher_io);
+    matcher.finished(&mut matcher_io);
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\n./.\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn multi_set_exit_code_if_executable_fails() {
+    let temp_dir = Builder::new()
+        .prefix("multi_set_exit_code_if_executable_fails")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = MultiExecMatcher::new(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "--exit_with_failure", "abc"],
+        true,
+    )
+    .expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+    let mut matcher_io = deps.new_matcher_io();
+    matcher.finished_dir(Path::new("test_data/simple"), &mut matcher_io);
+    assert_eq!(matcher_io.exit_code(), 1);
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}/test_data/simple\nargs=\n--exit_with_failure\nabc\n./abbbc\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn multi_set_exit_code_if_command_fails() {
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = MultiExecMatcher::new("1337", &["abc"], true).expect("Failed to create matcher");
+    let deps = FakeDependencies::new();
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+    let mut matcher_io = deps.new_matcher_io();
+    matcher.finished_dir(Path::new("test_data/simple"), &mut matcher_io);
+    assert_eq!(matcher_io.exit_code(), 1);
+}
+
+// -ok / -okdir tests
+//
+// These use FakeDependencies, which answers confirm() from a preset queue
+// rather than a real terminal.  That tests both the "confirmed" and
+// "declined" paths without needing a TTY.  The integration tests in
+// test_find.rs cover the stdin-fallback path (no controlling terminal).
+
+#[test]
+fn ok_executes_when_confirmed() {
+    // When the user confirms, -ok runs the command and returns true on success.
+    let temp_dir = Builder::new()
+        .prefix("ok_executes_when_confirmed")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new_interactive(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        false,
+    )
+    .expect("Failed to create matcher");
+
+    let deps = FakeDependencies::new();
+    deps.push_confirm_response(true);
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}\nargs=\nabc\ntest_data/simple/abbbc\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn ok_skips_when_declined() {
+    // When the user declines, -ok returns false without running the command.
+    let temp_dir = Builder::new()
+        .prefix("ok_skips_when_declined")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new_interactive(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        false,
+    )
+    .expect("Failed to create matcher");
+
+    let deps = FakeDependencies::new();
+    deps.push_confirm_response(false);
+    assert!(!matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    // The command was not run, so no output file should exist.
+    assert!(
+        !temp_dir.path().join("1.txt").exists(),
+        "command should not have run when user declined"
+    );
+}
+
+#[test]
+fn okdir_executes_in_parent_dir_when_confirmed() {
+    // -okdir runs the command in the file's parent directory, same as -execdir.
+    let temp_dir = Builder::new()
+        .prefix("okdir_executes_when_confirmed")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new_interactive(
+        &path_to_testing_commandline(),
+        &[temp_dir_path.as_ref(), "abc", "{}", "xyz"],
+        true, // exec_in_parent_dir = true → -okdir behaviour
+    )
+    .expect("Failed to create matcher");
+
+    let deps = FakeDependencies::new();
+    deps.push_confirm_response(true);
+    assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    let mut f = File::open(temp_dir.path().join("1.txt")).expect("Failed to open output file");
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .expect("failed to read output file");
+    assert_eq!(
+        s,
+        fix_up_slashes(&format!(
+            "cwd={}/test_data/simple\nargs=\nabc\n./abbbc\nxyz\n",
+            env::current_dir().unwrap().to_string_lossy()
+        ))
+    );
+}
+
+#[test]
+fn ok_returns_false_when_command_fails() {
+    // When the user confirms but the command exits non-zero, -ok returns false.
+    let temp_dir = Builder::new()
+        .prefix("ok_returns_false_when_command_fails")
+        .tempdir()
+        .unwrap();
+    let temp_dir_path = temp_dir.path().to_string_lossy();
+
+    let abbbc = get_dir_entry_for("test_data/simple", "abbbc");
+    let matcher = SingleExecMatcher::new_interactive(
+        &path_to_testing_commandline(),
+        &[
+            temp_dir_path.as_ref(),
+            "--exit_with_failure",
+            "abc",
+            "{}",
+            "xyz",
+        ],
+        false,
+    )
+    .expect("Failed to create matcher");
+
+    let deps = FakeDependencies::new();
+    deps.push_confirm_response(true);
+    assert!(!matcher.matches(&abbbc, &mut deps.new_matcher_io()));
+
+    // The command did run (output file exists), but it failed.
+    assert!(temp_dir.path().join("1.txt").exists());
+}

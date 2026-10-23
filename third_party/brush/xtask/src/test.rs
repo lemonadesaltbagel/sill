@@ -1,0 +1,493 @@
+//! Test commands for running various test suites.
+//!
+//! This module provides commands for running different types of tests:
+//!
+//! - **Unit tests**: Fast tests that don't execute the brush binary (excludes integration test
+//!   binaries like brush-compat-tests, brush-interactive-tests, brush-completion-tests)
+//! - **Integration tests**: All workspace tests including unit tests and integration tests that
+//!   execute the brush binary
+//! - **End-to-end tests**: Real applications' own suites (including bash-completion's), run in
+//!   containers; see `e2e/README.md`
+//!
+//! Both unit and integration tests support optional coverage collection via
+//! `cargo-llvm-cov`.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
+use xshell::{Shell, cmd};
+
+use crate::common::{BuildProfile, find_workspace_root};
+
+/// Integration test binaries that are excluded from unit tests.
+/// These tests execute the brush binary and are slower.
+const INTEGRATION_TEST_BINARIES: &[&str] = &[
+    "brush-compat-tests",
+    "brush-interactive-tests",
+    "brush-completion-tests",
+];
+
+#[cfg(windows)]
+const TEST_BINARIES_DISABLED_ON_WINDOWS: &[&str] = &["brush-compat-tests"];
+
+/// Shared arguments for test commands that need a brush binary.
+#[derive(Args, Debug, Clone)]
+pub struct BinaryArgs {
+    /// Path to the brush binary to test. If not specified, uses the binary
+    /// from the workspace's target directory based on --profile/--debug/--release.
+    #[clap(long, global = true)]
+    pub brush_path: Option<PathBuf>,
+
+    /// Build profile to use when auto-detecting the brush binary.
+    #[clap(long, short = 'p', value_enum, default_value_t = BuildProfile::Debug, global = true)]
+    pub profile: BuildProfile,
+
+    /// Use debug build profile (shorthand for --profile=debug).
+    #[clap(long, conflicts_with_all = ["profile", "release"], global = true)]
+    pub debug: bool,
+
+    /// Use release build profile (shorthand for --profile=release).
+    #[clap(long, conflicts_with_all = ["profile", "debug"], global = true)]
+    pub release: bool,
+}
+
+impl BinaryArgs {
+    /// Resolve the effective build profile, considering --debug/--release shorthands.
+    #[must_use]
+    pub const fn effective_profile(&self) -> BuildProfile {
+        if self.debug {
+            BuildProfile::Debug
+        } else if self.release {
+            BuildProfile::Release
+        } else {
+            self.profile
+        }
+    }
+
+    /// Find the brush binary using these arguments.
+    #[cfg(unix)]
+    pub fn find_brush_binary(&self) -> Result<PathBuf> {
+        crate::common::find_brush_binary(self.brush_path.as_ref(), self.effective_profile())
+    }
+}
+
+/// Run tests.
+#[derive(Parser)]
+pub struct TestCommand {
+    /// Shared binary arguments.
+    #[clap(flatten)]
+    pub binary_args: BinaryArgs,
+
+    /// Test subcommand.
+    #[clap(subcommand)]
+    pub subcommand: TestSubcommand,
+}
+
+/// Test subcommands.
+#[derive(Subcommand, Clone)]
+pub enum TestSubcommand {
+    /// Run unit tests (fast tests that don't execute the brush binary).
+    ///
+    /// Excludes integration test binaries: brush-compat-tests, brush-interactive-tests,
+    /// brush-completion-tests.
+    Unit(UnitTestArgs),
+
+    /// Run all workspace tests (unit + integration tests).
+    ///
+    /// This includes all tests: unit tests plus integration tests that execute
+    /// the brush binary (compat tests, interactive tests, completion tests).
+    Integration(IntegrationTestArgs),
+
+    /// Run containerized end-to-end tests against real applications.
+    #[cfg(unix)]
+    E2e(crate::e2e::E2eArgs),
+}
+
+/// Arguments for unit tests.
+#[derive(Args, Clone, Default)]
+pub struct UnitTestArgs {
+    /// Coverage options.
+    #[clap(flatten)]
+    pub coverage: CoverageArgs,
+}
+
+/// Arguments for integration tests.
+#[derive(Args, Clone, Default)]
+pub struct IntegrationTestArgs {
+    /// Coverage options.
+    #[clap(flatten)]
+    pub coverage: CoverageArgs,
+
+    /// Copy the nextest `JUnit` XML results to this path after the test run.
+    /// The copy is performed even if tests fail, so CI can always upload results.
+    #[clap(long)]
+    pub results_output: Option<PathBuf>,
+
+    /// Build and test against a wasm32-wasip3 target under a WASI runtime
+    /// (wasmtime by default). Builds brush for wasm32-wasip3 with its default
+    /// features, then runs a subset of integration tests (excluding compat,
+    /// interactive, and completion suites) under the WASI launcher. Needs a
+    /// toolchain with the wasm32-wasip3 target (Rust 1.100+, or nightly) and
+    /// a runtime with WASI 0.3 support (e.g., wasmtime 46+).
+    #[clap(long)]
+    pub wasi: bool,
+
+    /// Launcher command for the WASI runtime (only used with --wasi).
+    /// The first token is resolved against `PATH`; subsequent tokens are
+    /// passed as leading arguments before the brush binary path.
+    /// Defaults to `wasmtime run -S inherit-env --dir=.::/ --allow-precompiled --`.
+    #[clap(long)]
+    pub wasi_launcher: Option<String>,
+
+    /// Skip the WASI wasm build step and assume brush.wasm is already
+    /// present at the expected path (only used with --wasi).
+    #[clap(long)]
+    pub skip_wasi_build: bool,
+}
+
+/// Arguments for coverage collection.
+#[derive(Args, Clone, Default)]
+pub struct CoverageArgs {
+    /// Collect code coverage during test run.
+    #[clap(long)]
+    pub coverage: bool,
+
+    /// Output file for coverage report (Cobertura XML format).
+    /// Only used when --coverage is specified.
+    #[clap(long, short = 'o', default_value = "codecov.xml")]
+    pub coverage_output: PathBuf,
+}
+
+/// Run a test command.
+pub fn run(cmd: &TestCommand, verbose: bool) -> Result<()> {
+    let sh = Shell::new()?;
+
+    match &cmd.subcommand {
+        TestSubcommand::Unit(args) => run_unit_tests(&sh, &cmd.binary_args, args, verbose),
+        TestSubcommand::Integration(args) => {
+            run_integration_tests(&sh, &cmd.binary_args, args, verbose)
+        }
+        #[cfg(unix)]
+        TestSubcommand::E2e(args) => crate::e2e::run(&cmd.binary_args, args, verbose),
+    }
+}
+
+/// Run unit tests (excludes integration test binaries).
+///
+/// Unit tests are fast tests that don't execute the brush binary.
+pub fn run_unit_tests(
+    sh: &Shell,
+    binary_args: &BinaryArgs,
+    args: &UnitTestArgs,
+    verbose: bool,
+) -> Result<()> {
+    let profile = binary_args.effective_profile();
+    eprintln!("Running unit tests ({profile:?} profile)...");
+
+    // Build the filter expression to exclude integration test binaries
+    let exclusions: Vec<String> = INTEGRATION_TEST_BINARIES
+        .iter()
+        .map(|name| format!("not binary({name})"))
+        .collect();
+    let filter_expr = exclusions.join(" and ");
+
+    if args.coverage.coverage {
+        run_tests_with_coverage(
+            sh,
+            profile,
+            Some(&filter_expr),
+            &args.coverage.coverage_output,
+            verbose,
+        )
+    } else {
+        run_nextest(sh, profile, Some(&filter_expr), verbose)?;
+        eprintln!("Unit tests passed.");
+        Ok(())
+    }
+}
+
+/// Run all workspace tests (unit + integration).
+///
+/// This runs all tests in the workspace, including integration tests
+/// that execute the brush binary. With `--wasi`, builds brush for
+/// wasm32-wasip3 and runs the integration tests under a WASI runtime.
+pub fn run_integration_tests(
+    sh: &Shell,
+    binary_args: &BinaryArgs,
+    args: &IntegrationTestArgs,
+    verbose: bool,
+) -> Result<()> {
+    let profile = binary_args.effective_profile();
+
+    if args.wasi {
+        if args.coverage.coverage {
+            eprintln!("Warning: --coverage is not supported with --wasi and will be ignored.");
+        }
+        return run_integration_tests_wasi(sh, profile, args, verbose);
+    }
+
+    eprintln!("Running integration tests ({profile:?} profile)...");
+
+    #[cfg(windows)]
+    let exclusions: Vec<String> = TEST_BINARIES_DISABLED_ON_WINDOWS
+        .iter()
+        .map(|name| format!("not binary({name})"))
+        .collect();
+    #[cfg(windows)]
+    let filter_expr = exclusions.join(" and ");
+    #[cfg(windows)]
+    let filter = Some(filter_expr.as_str());
+
+    #[cfg(not(windows))]
+    let filter = None;
+
+    let test_result = if args.coverage.coverage {
+        run_tests_with_coverage(sh, profile, filter, &args.coverage.coverage_output, verbose)
+    } else {
+        run_nextest(sh, profile, filter, verbose).map(|()| {
+            eprintln!("Integration tests passed.");
+        })
+    };
+
+    // Copy nextest results if requested (even on test failure, so CI can upload them).
+    if let Some(ref output) = args.results_output {
+        copy_nextest_results(output)?;
+    }
+
+    test_result
+}
+
+/// Run the brush integration tests against a wasm32-wasip3 build of brush,
+/// executed under a WASI runtime. Builds the wasm module first unless
+/// `--skip-wasi-build` is given, then runs the integration tests via nextest
+/// with the appropriate environment variables populated for the test harness.
+fn run_integration_tests_wasi(
+    sh: &Shell,
+    profile: BuildProfile,
+    args: &IntegrationTestArgs,
+    verbose: bool,
+) -> Result<()> {
+    let is_release = profile == BuildProfile::Release;
+
+    // Build the wasm module unless the caller opts out.
+    if !args.skip_wasi_build {
+        eprintln!("Building brush for wasm32-wasip3...");
+        let mut build_args = vec![
+            "build",
+            "--target",
+            "wasm32-wasip3",
+            "-p",
+            "brush-shell",
+            "--bin",
+            "brush",
+        ];
+        if is_release {
+            build_args.push("--release");
+        }
+        if verbose {
+            eprintln!("Running: cargo {}", build_args.join(" "));
+        }
+        cmd!(sh, "cargo {build_args...}")
+            .run()
+            .context("failed to build brush for wasm32-wasip3")?;
+    }
+
+    // Locate the wasm module that was (or should have been) produced.
+    let workspace_root = find_workspace_root()?;
+    let profile_dir = if is_release { "release" } else { "debug" };
+    let wasm_path = workspace_root
+        .join("target/wasm32-wasip3")
+        .join(profile_dir)
+        .join("brush.wasm");
+    let wasm_path = wasm_path.canonicalize().with_context(|| {
+        format!(
+            "brush.wasm not found at {} — did the build step succeed?",
+            wasm_path.display()
+        )
+    })?;
+
+    // The `--dir=.::/` flag maps the host root filesystem into the WASI
+    // sandbox. This is intentionally permissive for testing — tests create
+    // temp dirs and need access to fixtures across the filesystem. This is
+    // NOT a recommended default for production use of brush under WASI.
+    // Pre-compile the wasm module to avoid JIT compilation overhead during
+    // parallel test execution. Without this, multiple concurrent wasmtime
+    // processes each try to JIT-compile brush.wasm simultaneously, which
+    // can exceed test timeouts on CI.
+    eprintln!("Pre-compiling brush.wasm...");
+    let cwasm_path = wasm_path.with_extension("cwasm");
+    {
+        let wasm_arg = wasm_path.display().to_string();
+        let cwasm_arg = cwasm_path.display().to_string();
+        cmd!(sh, "wasmtime compile {wasm_arg} -o {cwasm_arg}")
+            .run()
+            .context("failed to pre-compile brush.wasm with wasmtime")?;
+    }
+
+    // The default launcher includes --allow-precompiled so wasmtime accepts
+    // the AOT-compiled .cwasm module without re-compilation, and
+    // `-S inherit-env` so the environment the harness sets for each test
+    // case reaches brush.
+    let launcher = args
+        .wasi_launcher
+        .as_deref()
+        .unwrap_or("wasmtime run -S inherit-env --dir=.::/ --allow-precompiled --");
+
+    eprintln!("Running brush integration tests under WASI...");
+    eprintln!("  wasm:     {}", cwasm_path.display());
+    eprintln!("  launcher: {launcher}");
+
+    let brush_path_str = cwasm_path.display().to_string();
+    let _brush_path = sh.push_env("BRUSH_PATH", &brush_path_str);
+    let _brush_launcher = sh.push_env("BRUSH_LAUNCHER", launcher);
+    let _brush_platform_tags = sh.push_env("BRUSH_PLATFORM_TAGS", "wasi wasm");
+
+    // Only run the brush integration tests; compat tests require a native binary.
+    let filter = "binary(brush-integration-tests)";
+    let test_result = run_nextest(sh, profile, Some(filter), verbose);
+
+    // Copy nextest results if requested (even on test failure, so CI can upload them).
+    if let Some(ref output) = args.results_output {
+        copy_nextest_results(output)?;
+    }
+
+    test_result
+}
+
+/// Run cargo nextest with optional filter expression.
+fn run_nextest(
+    sh: &Shell,
+    profile: BuildProfile,
+    filter_expr: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
+    let mut args = vec!["nextest", "run", "--workspace", "--no-fail-fast"];
+
+    if profile == BuildProfile::Release {
+        args.push("--release");
+    }
+
+    // Add filter expression if provided
+    let filter_value = filter_expr.map(str::to_string);
+    if let Some(ref value) = filter_value {
+        args.push("-E");
+        args.push(value);
+    }
+
+    if verbose {
+        eprintln!("Running: cargo {}", args.join(" "));
+    }
+
+    cmd!(sh, "cargo {args...}").run().context("Tests failed")?;
+    Ok(())
+}
+
+/// Copy the nextest `JUnit` XML results to the given output path.
+fn copy_nextest_results(output: &Path) -> Result<()> {
+    let workspace_root = find_workspace_root()?;
+    let source = workspace_root.join("target/nextest/default/test-results.xml");
+    std::fs::copy(&source, output).with_context(|| {
+        format!(
+            "Failed to copy nextest results from {} to {}",
+            source.display(),
+            output.display()
+        )
+    })?;
+    eprintln!("Nextest results copied to: {}", output.display());
+    Ok(())
+}
+
+/// Run tests with code coverage collection using `cargo-llvm-cov`.
+///
+/// The coverage workflow:
+/// 1. Source environment variables from `cargo llvm-cov show-env`
+/// 2. Clean previous coverage data
+/// 3. Run tests (continuing even if tests fail to still generate report)
+/// 4. Generate Cobertura XML report for CI integration
+///
+/// Requires `cargo-llvm-cov` to be installed: `cargo install cargo-llvm-cov`
+fn run_tests_with_coverage(
+    sh: &Shell,
+    profile: BuildProfile,
+    filter_expr: Option<&str>,
+    output: &Path,
+    verbose: bool,
+) -> Result<()> {
+    let output_path = output.display().to_string();
+
+    eprintln!("Running tests with coverage ({profile:?} profile)...");
+    eprintln!("Coverage output: {output_path}");
+
+    // Set up llvm-cov environment
+    eprintln!("Setting up llvm-cov environment...");
+    if verbose {
+        eprintln!("Running: cargo llvm-cov show-env --export-prefix");
+    }
+    let env_output = cmd!(sh, "cargo llvm-cov show-env --export-prefix")
+        .read()
+        .context("Failed to get llvm-cov environment. Is cargo-llvm-cov installed?")?;
+
+    // Parse and set environment variables from llvm-cov output
+    env_output
+        .lines()
+        .filter_map(|line| line.strip_prefix("export "))
+        .filter_map(|rest| rest.split_once('='))
+        .for_each(|(k, v)| sh.set_var(k, v.trim_matches(['"', '\''])));
+
+    // Clean previous coverage data
+    if verbose {
+        eprintln!("Running: cargo llvm-cov clean --workspace");
+    }
+    cmd!(sh, "cargo llvm-cov clean --workspace")
+        .run()
+        .context("Failed to clean coverage data")?;
+
+    // Build cargo nextest args
+    let mut test_args = vec!["nextest", "run", "--workspace", "--no-fail-fast"];
+    if profile == BuildProfile::Release {
+        test_args.push("--release");
+    }
+
+    // Add filter expression if provided
+    let filter_value = filter_expr.map(str::to_string);
+    if let Some(ref value) = filter_value {
+        test_args.push("-E");
+        test_args.push(value);
+    }
+
+    if verbose {
+        eprintln!("Running: cargo {}", test_args.join(" "));
+    }
+
+    // Run tests - let output pass through naturally, but continue on failure to generate coverage
+    // report
+    let test_result = cmd!(sh, "cargo {test_args...}").run();
+    let test_failed = test_result.is_err();
+
+    if test_failed {
+        eprintln!("Tests failed, but continuing to generate coverage report...");
+    }
+
+    // Generate coverage report (always attempt this)
+    eprintln!("Generating coverage report...");
+    if verbose {
+        eprintln!("Running: cargo llvm-cov report --cobertura --output-path {output_path}");
+    }
+    cmd!(
+        sh,
+        "cargo llvm-cov report --cobertura --output-path {output_path}"
+    )
+    .run()
+    .context("Failed to generate coverage report")?;
+
+    eprintln!("Coverage report written to: {output_path}");
+
+    // Now propagate test failure if tests failed
+    if test_failed {
+        anyhow::bail!("Tests failed (coverage report was still generated)");
+    }
+
+    eprintln!("Tests with coverage completed successfully.");
+    Ok(())
+}

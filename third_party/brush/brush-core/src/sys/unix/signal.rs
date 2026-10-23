@@ -1,0 +1,303 @@
+//! Signal processing utilities
+
+use crate::{error, sys, traps};
+
+pub(crate) use nix::sys::signal::Signal;
+
+pub(crate) fn continue_process(pid: sys::process::ProcessId) -> Result<(), error::Error> {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGCONT)
+        .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
+    Ok(())
+}
+
+/// Continues every process in a process group.
+///
+/// # Arguments
+/// * `pgid` - The process group's ID.
+pub(crate) fn continue_process_group(pgid: sys::process::ProcessId) -> Result<(), error::Error> {
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), nix::sys::signal::SIGCONT)
+        .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
+    Ok(())
+}
+
+/// Sends a signal to a specific process.
+///
+/// # Arguments
+/// * `pid` - The process ID to send the signal to
+/// * `signal` - The signal to send (must be a real signal, not a trap signal)
+pub fn kill_process(
+    pid: sys::process::ProcessId,
+    signal: traps::TrapSignal,
+) -> Result<(), error::Error> {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), real_signal(signal)?)
+        .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
+
+    Ok(())
+}
+
+/// Sends a signal to every process in a process group.
+///
+/// # Arguments
+/// * `pgid` - The process group's ID.
+/// * `signal` - The signal to send (must be a real signal, not a trap signal)
+pub(crate) fn kill_process_group(
+    pgid: sys::process::ProcessId,
+    signal: traps::TrapSignal,
+) -> Result<(), error::Error> {
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), real_signal(signal)?)
+        .map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
+
+    Ok(())
+}
+
+/// Returns whether a stopped process sent the given signal must be continued for it to act on
+/// it, as bash continues a stopped job sent SIGTERM or SIGHUP: some systems leave those pending
+/// until then.
+pub(crate) const fn continue_stopped_on(signal: traps::TrapSignal) -> bool {
+    matches!(
+        signal,
+        traps::TrapSignal::Signal(Signal::SIGTERM | Signal::SIGHUP)
+    )
+}
+
+fn real_signal(signal: traps::TrapSignal) -> Result<Signal, error::Error> {
+    match signal {
+        traps::TrapSignal::Signal(signal) => Ok(signal),
+        traps::TrapSignal::Debug
+        | traps::TrapSignal::Err
+        | traps::TrapSignal::Exit
+        | traps::TrapSignal::Return => {
+            Err(error::ErrorKind::InvalidSignal(signal.to_string()).into())
+        }
+    }
+}
+
+/// Checks whether a specific process exists and can be signaled.
+///
+/// # Arguments
+/// * `pid` - The process ID to signal-zero check.
+pub fn check_signalable(pid: sys::process::ProcessId) -> Result<(), error::Error> {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).map_err(signal_error)?;
+    Ok(())
+}
+
+/// Checks whether a process group exists and can be signaled.
+///
+/// # Arguments
+/// * `pgid` - The process group's ID.
+pub(crate) fn check_process_group_signalable(
+    pgid: sys::process::ProcessId,
+) -> Result<(), error::Error> {
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None).map_err(signal_error)?;
+    Ok(())
+}
+
+const fn signal_error(errno: nix::errno::Errno) -> error::ErrorKind {
+    match errno {
+        nix::errno::Errno::ESRCH => error::ErrorKind::NoSuchProcess,
+        nix::errno::Errno::EPERM => error::ErrorKind::PermissionDenied,
+        _ => error::ErrorKind::FailedToSendSignal,
+    }
+}
+
+pub(crate) fn lead_new_process_group() -> Result<(), error::Error> {
+    nix::unistd::setpgid(nix::unistd::Pid::from_raw(0), nix::unistd::Pid::from_raw(0))?;
+    Ok(())
+}
+
+pub(crate) fn tstp_signal_listener() -> Result<tokio::signal::unix::Signal, error::Error> {
+    let signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+        nix::libc::SIGTSTP,
+    ))?;
+    Ok(signal)
+}
+
+pub(crate) fn chld_signal_listener() -> Result<tokio::signal::unix::Signal, error::Error> {
+    let signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
+    Ok(signal)
+}
+
+pub use tokio::signal::ctrl_c as await_ctrl_c;
+
+pub(crate) fn mask_sigttou() -> Result<(), error::Error> {
+    let ignore = nix::sys::signal::SigAction::new(
+        nix::sys::signal::SigHandler::SigIgn,
+        nix::sys::signal::SaFlags::empty(),
+        nix::sys::signal::SigSet::empty(),
+    );
+
+    // SAFETY:
+    // Setting the signal action should be safe here. The unsafe concerns
+    // for calling `sigaction` are primarily around ensuring that any provided
+    // signal handler functions are only performing operations that are
+    // safe to do in a signal handler context. Here we are not providing
+    // a custom handler, just asking the OS to ignore the signal.
+    unsafe { nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &ignore) }?;
+
+    Ok(())
+}
+
+/// Returns whether the given child process has stopped, consuming its stop status, and leaving
+/// other children's stops to whoever waits on them. On NetBSD and OpenBSD, where one child
+/// can't be looked at (see `waitid_one`), any child's stop counts, as before.
+///
+/// # Arguments
+///
+/// * `pid` - The child's process ID.
+pub(crate) fn poll_for_stopped_children(
+    pid: sys::process::ProcessId,
+) -> Result<bool, error::Error> {
+    let mut found_stopped = false;
+
+    loop {
+        let wait_status = waitid_for(
+            pid,
+            nix::sys::wait::WaitPidFlag::WUNTRACED | nix::sys::wait::WaitPidFlag::WNOHANG,
+        );
+        match wait_status {
+            Ok(nix::sys::wait::WaitStatus::Stopped(_stopped_pid, _signal)) => {
+                found_stopped = true;
+            }
+            Ok(_) => break,
+            Err(nix::errno::Errno::ECHILD) => break,
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(found_stopped)
+}
+
+/// Returns whether the given child process has stopped since that was last
+/// reported. Doesn't reap the child if it has exited.
+///
+/// # Arguments
+///
+/// * `pid` - The child's process ID.
+pub(crate) fn poll_for_stopped_child(pid: sys::process::ProcessId) -> Result<bool, error::Error> {
+    let flags = nix::sys::wait::WaitPidFlag::WUNTRACED | nix::sys::wait::WaitPidFlag::WNOHANG;
+    match waitid_one(pid, flags) {
+        Ok(nix::sys::wait::WaitStatus::Stopped(..)) => Ok(true),
+        Ok(_) | Err(nix::errno::Errno::ECHILD) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(any(target_os = "netbsd", target_os = "openbsd")))]
+fn waitid_for(
+    pid: sys::process::ProcessId,
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    waitid_one(pid, flags)
+}
+
+// There's no looking at one child on NetBSD/OpenBSD (see `waitid_one`), so look at any
+// child, as before.
+#[cfg(any(target_os = "netbsd", target_os = "openbsd"))]
+fn waitid_for(
+    _pid: sys::process::ProcessId,
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    waitid_all(flags)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "netbsd", target_os = "openbsd")))]
+fn waitid_one(
+    pid: sys::process::ProcessId,
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    nix::sys::wait::waitid(
+        nix::sys::wait::Id::Pid(nix::unistd::Pid::from_raw(pid)),
+        flags,
+    )
+}
+
+// nix does not expose `waitid` on NetBSD/OpenBSD, and `waitpid` would reap a child
+// that has exited, so don't look.
+#[cfg(any(target_os = "netbsd", target_os = "openbsd"))]
+#[allow(clippy::unnecessary_wraps, reason = "matches other platforms")]
+const fn waitid_one(
+    _pid: sys::process::ProcessId,
+    _flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    Ok(nix::sys::wait::WaitStatus::StillAlive)
+}
+
+// nix does not expose `waitid` on NetBSD/OpenBSD; `waitpid` for any child is
+// equivalent for the flags used here.
+#[cfg(any(target_os = "netbsd", target_os = "openbsd"))]
+fn waitid_all(
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    nix::sys::wait::waitpid(None, Some(flags))
+}
+
+//
+// N.B. These functions were mostly copied from nix::sys::wait (https://github.com/nix-rust/nix, MIT license)
+// to enable use of the `waitid` call on macOS. Ideally nix would expose it on macOS and we would
+// remove this code.
+//
+
+#[cfg(target_os = "macos")]
+fn waitid_one(
+    pid: sys::process::ProcessId,
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    #[expect(clippy::cast_sign_loss, reason = "process IDs are positive")]
+    waitid_macos(nix::libc::P_PID, pid as nix::libc::id_t, flags)
+}
+
+#[cfg(target_os = "macos")]
+fn waitid_macos(
+    idtype: nix::libc::idtype_t,
+    id: nix::libc::id_t,
+    flags: nix::sys::wait::WaitPidFlag,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    // SAFETY:
+    // Code copied from nix::sys::wait implementation of waitid for other platforms.
+    // The siginfo structure is valid when filled with zeroes. Memory is zeroed
+    // rather than uninitialized, as not all platforms initialize the memory in
+    // the StillAlive case.
+    let mut siginfo: nix::libc::siginfo_t = unsafe { std::mem::zeroed() };
+
+    // SAFETY:
+    // Code copied from nix::sys::wait implementation of waitid for other platforms.
+    nix::errno::Errno::result(unsafe {
+        nix::libc::waitid(idtype, id, &raw mut siginfo, flags.bits())
+    })?;
+
+    siginfo_to_wait_status(siginfo)
+}
+
+#[cfg(target_os = "macos")]
+fn siginfo_to_wait_status(
+    siginfo: nix::libc::siginfo_t,
+) -> Result<nix::sys::wait::WaitStatus, nix::errno::Errno> {
+    // SAFETY:
+    // Code copied from nix::sys::wait implementation of waitid for other platforms.
+    let si_pid = unsafe { siginfo.si_pid() };
+    if si_pid == 0 {
+        return Ok(nix::sys::wait::WaitStatus::StillAlive);
+    }
+
+    let pid = nix::unistd::Pid::from_raw(si_pid);
+
+    // SAFETY:
+    // Code copied from nix::sys::wait implementation of waitid for other platforms.
+    let si_status = unsafe { siginfo.si_status() };
+
+    let status = match siginfo.si_code {
+        nix::libc::CLD_EXITED => nix::sys::wait::WaitStatus::Exited(pid, si_status),
+        nix::libc::CLD_KILLED | nix::libc::CLD_DUMPED => nix::sys::wait::WaitStatus::Signaled(
+            pid,
+            nix::sys::signal::Signal::try_from(si_status)?,
+            siginfo.si_code == nix::libc::CLD_DUMPED,
+        ),
+        nix::libc::CLD_STOPPED => {
+            nix::sys::wait::WaitStatus::Stopped(pid, nix::sys::signal::Signal::try_from(si_status)?)
+        }
+        nix::libc::CLD_CONTINUED => nix::sys::wait::WaitStatus::Continued(pid),
+        _ => return Err(nix::errno::Errno::EINVAL),
+    };
+
+    Ok(status)
+}

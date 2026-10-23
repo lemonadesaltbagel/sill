@@ -1,0 +1,212 @@
+name: "Options: errtrace (-E)"
+cases:
+  #
+  # Basic errtrace option behavior
+  #
+  - name: "errtrace disabled by default"
+    stdin: |
+      set +E 2>/dev/null || true
+      echo "errtrace test"
+
+  - name: "errtrace can be enabled and disabled"
+    stdin: |
+      set -E
+      echo "enabled: $-" | grep -q E && echo "E is set"
+      set +E
+      echo "disabled: $-" | grep -qv E && echo "E is unset"
+
+  #
+  # ERR trap inheritance in functions (core errtrace behavior)
+  #
+  - name: "errtrace disabled - functions don't inherit ERR trap"
+    stdin: |
+      set +E
+      trap 'echo "ERR trapped"' ERR
+      myfunc() { false; }
+      myfunc
+      echo "after"
+
+  - name: "errtrace enabled - functions inherit ERR trap"
+    stdin: |
+      set -E
+      trap 'echo "ERR trapped"' ERR
+      myfunc() { false; }
+      myfunc
+      echo "after"
+
+  - name: "errtrace with nested functions"
+    stdin: |
+      set -E
+      trap 'echo "ERR trapped"' ERR
+      inner() { false; }
+      outer() { inner; }
+      outer
+      echo "after"
+
+  - name: "errtrace toggling mid-script"
+    stdin: |
+      trap 'echo "ERR trapped"' ERR
+      set -E
+      myfunc1() { false; }
+      myfunc1
+      echo "after first call"
+      set +E
+      myfunc2() { false; }
+      myfunc2
+      echo "after second call"
+
+  #
+  # ERR trap inheritance in subshells
+  #
+  - name: "errtrace disabled - subshell doesn't inherit ERR trap"
+    stdin: |
+      set +E
+      trap 'echo "ERR"' ERR
+      (
+        trap -p ERR
+        false
+        echo "no ERR trap fired"
+      )
+      echo "after"
+
+  - name: "errtrace enabled - subshell inherits ERR trap"
+    stdin: |
+      set -E
+      trap 'echo "ERR"' ERR
+      (
+        trap -p ERR | grep -q ERR && echo "ERR trap inherited"
+        false
+        echo "after false in subshell"
+      )
+      echo "after"
+
+  #
+  # ERR trap inheritance in command substitution
+  #
+  - name: "errtrace disabled - command substitution doesn't inherit ERR trap"
+    stdin: |
+      set +E
+      trap 'echo "[ERR trapped]" >&2' ERR
+      result=$(trap -p ERR; false; echo "no trap inherited")
+      echo "result: $result"
+
+  - name: "errtrace enabled - command substitution inherits ERR trap"
+    stdin: |
+      set -E
+      trap 'echo "[ERR in subshell]" >&2' ERR
+      result=$(false; echo "after false in subshell")
+      echo "result: $result"
+
+  #
+  # ERR trap inheritance in pipelines
+  #
+  - name: "errtrace with pipeline - last command fails"
+    stdin: |
+      set -E
+      trap 'echo "[ERR: $?]" >&2' ERR
+      echo "data" | cat | false
+      echo "after pipeline"
+
+  - name: "errtrace with pipeline - middle command fails (pipefail)"
+    stdin: |
+      set -E
+      set -o pipefail
+      trap 'echo "[ERR: $?]" >&2' ERR
+      echo "data" | false | cat
+      echo "after pipeline"
+
+  - name: "errtrace - ERR trap in pipeline subshells"
+    stdin: |
+      set -E
+      trap 'echo "[ERR: $BASH_COMMAND]" >&2' ERR
+      echo "input" | { false; echo "after false in brace"; }
+      echo "done"
+
+  #
+  # ERR trap with errexit interaction
+  #
+  - name: "errtrace with errexit - ERR trap fires before exit"
+    stdin: |
+      set -e
+      set -E
+      trap 'echo "ERR trap fired"' ERR
+      false
+      echo "should not print"
+
+  - name: "errtrace with errexit in function"
+    stdin: |
+      set -e
+      set -E
+      trap 'echo "ERR trap"' ERR
+      myfunc() { false; }
+      myfunc
+      echo "should not print"
+
+  #
+  # ERR trap inheritance in deeply nested functions
+  #
+  - name: "errtrace - ERR trap in deeply nested function"
+    stdin: |
+      set -E
+      trap 'echo "ERR at level ${#FUNCNAME[@]}"' ERR
+      level3() { false; }
+      level2() { level3; }
+      level1() { level2; }
+      level1
+      echo "after"
+
+  #
+  # ERR trap modification within functions
+  #
+  - name: "errtrace - ERR trap can be changed inside function"
+    stdin: |
+      set -E
+      trap 'echo "outer ERR"' ERR
+      myfunc() {
+        trap 'echo "inner ERR"' ERR
+        false
+      }
+      myfunc
+      false
+      echo "after"
+
+  - name: "errtrace - ERR trap can be cleared inside function"
+    stdin: |
+      set -E
+      trap 'echo "ERR"' ERR
+      myfunc() {
+        trap - ERR
+        false
+        echo "no ERR in func"
+      }
+      myfunc
+      false
+      echo "after"
+
+  #
+  # ERR trap in background jobs with errtrace
+  #
+  - name: "errtrace - ERR trap in background job"
+    stdin: |
+      set -E
+      trap 'echo "ERR" >&2' ERR
+      { false; echo "bg done"; } &
+      wait
+      echo "main done"
+
+  #
+  # Sourced scripts with errtrace
+  #
+  - name: "errtrace - ERR trap inherited in sourced script"
+    test_files:
+      - path: "failing.sh"
+        contents: |
+          echo "in sourced"
+          false
+          echo "after false in sourced"
+    stdin: |
+      set -E
+      trap 'echo "ERR trapped"' ERR
+      . ./failing.sh
+      echo "after source"
+

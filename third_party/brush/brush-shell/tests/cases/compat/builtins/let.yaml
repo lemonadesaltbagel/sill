@@ -1,0 +1,43 @@
+name: "Builtins: let"
+cases:
+  - name: "Basic let usage"
+    stdin: |
+      let 0; echo "0 => $?"
+      let 1; echo "1 => $?"
+
+      let 0==0; echo "0==0 => $?"
+      let 0!=0; echo "0!=0 => $?"
+
+      let 1 0; echo "1 0 => $?"
+      let 0 1; echo "0 1 => $?"
+
+  - name: "let with assignment"
+    stdin: |
+      let x=10; echo "x=10 => $?; x==${x}"
+
+  - name: "let assignment through nameref"
+    known_failure: true
+    stdin: |
+      target=0
+      declare -n ref=target
+      let ref=42
+      echo "target: $target"
+      let ref+=8
+      echo "target: $target"
+      let ref++
+      echo "target: $target"
+
+  - name: "let with no arguments fails with status 1"
+    known_failure: true # TODO(let): fails with status 2, where bash fails with 1
+    ignore_stderr: true
+    stdin: |
+      let
+      echo "let: $?"
+
+  - name: "let with an unset variable under set -u ends the shell"
+    known_failure: true # TODO(let): fails with status 1, and the script carries on
+    ignore_stderr: true
+    stdin: |
+      set -u
+      let 'y = nope + 1'; echo "rc=$?"
+      echo next

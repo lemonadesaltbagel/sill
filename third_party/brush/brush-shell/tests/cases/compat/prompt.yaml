@@ -1,0 +1,335 @@
+name: "Prompt"
+cases:
+  - name: "Simple prompts"
+    stdin: |
+      prompt='$ '
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='a\r\n> '
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='\\'
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='\?'
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='\81'
+      echo "Prompt: '${prompt@P}'"
+
+  - name: "Working dir based prompts"
+    stdin: |
+      cd /usr
+
+      prompt='\w '
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='\W '
+      echo "Prompt: '${prompt@P}'"
+
+      arr=("\w" "\w")
+      echo "Prompt: '${arr@P}'"
+      echo "Prompt: '${arr[@]@P}'"
+      echo "Prompt: '${arr[*]@P}'"
+
+  - name: "Non-printing chars"
+    stdin: |
+      prompt='\[\]Prompt>\[\]'
+      echo "Prompt: '${prompt@P}'"
+
+  - name: "Hostname in prompts"
+    stdin: |
+      prompt='\h '
+      echo "Prompt: '${prompt@P}'"
+
+      prompt='\H '
+      echo "Prompt: '${prompt@P}'"
+
+  - name: "Shell name"
+    stdin: |
+      prompt='\s'
+      [[ "${prompt@P}" == "$(basename $0)" ]]
+
+  - name: "Shell version info"
+    stdin: |
+      prompt='\v'
+      [[ "${prompt@P}" =~ ^\d+\.\d+$ ]] && echo "Version is well-formatted"
+
+      prompt='\V'
+      [[ "${prompt@P}" == ^\d+\.\d+\.\d+$ ]] && echo "Release is correct"
+
+  - name: "Simple date"
+    stdin: |
+      prompt='\d'
+      [[ "${prompt@P}" == $(date +'%a %b %d') ]] && echo '\d date matches'
+
+  - name: "Date format with plain string"
+    stdin: |
+      prompt='\D{something}'
+      echo "Date format with plain string: '${prompt@P}'"
+
+  - name: "Date format with year"
+    stdin: |
+      prompt='\d{%Y}'
+      echo "Date format with year: '${prompt@P}'"
+
+  - name: "Time format: A"
+    stdin: |
+      prompt='\A'
+      expanded=${prompt@P}
+      roundtripped=$(date --date="${expanded}" +'%H:%M')
+      [[ ${expanded} == ${roundtripped} ]] && echo "Time matches"
+
+  - name: "Time format: @"
+    stdin: |
+      prompt='\@'
+      expanded=${prompt@P}
+      roundtripped=$(date --date="${expanded}" +'%I:%M %p')
+      [[ ${expanded} == ${roundtripped} ]] && echo "Time matches"
+
+  - name: "Time format: T"
+    stdin: |
+      prompt='\T'
+      expanded=${prompt@P}
+      roundtripped=$(date --date="${expanded}" +'%I:%M:%S')
+      [[ ${expanded} == ${roundtripped} ]] && echo "Time matches"
+
+  - name: "Time format: t"
+    stdin: |
+      prompt='\t'
+      expanded=${prompt@P}
+      roundtripped=$(date --date="${expanded}" +'%H:%M:%S')
+      [[ ${expanded} == ${roundtripped} ]] && echo "Time matches"
+
+  - name: "Current history number"
+    known_failure: true
+    stdin: |
+      prompt='\!'
+      expanded=${prompt@P}
+      roundtripped=$(history | tail -n 1 | cut -d ' ' -f 1)
+      [[ ${expanded} == ${roundtripped} ]] && echo "History number matches"
+
+  - name: "Current command number"
+    known_failure: true # Issue #471
+    stdin: |
+      prompt='\#'
+      expanded=${prompt@P}
+      echo "${expanded}"
+
+  - name: "Escaped dollar-sign"
+    stdin: |
+      prompt='\$'
+      echo "Prompt: '${prompt@P}'"
+
+  - name: "Var in prompt"
+    stdin: |
+      var=value
+
+      prompt="\$var"
+
+      shopt -s promptvars
+      echo "Prompt (dollar-sign not escaped, with promptvars): ${prompt@P}"
+
+      shopt -u promptvars
+      echo "Prompt (dollar-sign not escaped, without promptvars): ${prompt@P}"
+
+      prompt="\\\$var"
+
+      shopt -s promptvars
+      echo "Prompt (dollar-sign escaped, with promptvars): ${prompt@P}"
+
+      shopt -u promptvars
+      echo "Prompt (dollar-sign escaped, without promptvars): ${prompt@P}"
+
+  - name: "Tilde in prompt"
+    stdin: |
+      HOME=$(pwd)
+
+      prompt='~'
+
+      shopt -s promptvars
+      echo "Prompt (with promptvars): ${prompt@P}"
+
+      shopt -u promptvars
+      echo "Prompt (without promptvars): ${prompt@P}"
+
+  - name: "Command substitution in prompt"
+    stdin: |
+      prompt='$(echo Hello)'
+      echo "Without spaces: ${prompt@P}"
+
+      prompt=' $(echo Hello) '
+      echo "With spaces: ${prompt@P}"
+
+  - name: "Backquoted command substitution in prompt"
+    stdin: |
+      prompt='`echo Hello`'
+      echo "Without spaces: ${prompt@P}"
+
+      prompt=' `echo Hello` '
+      echo "With spaces: ${prompt@P}"
+
+  - name: "Parameter expansion with non-printing chars"
+    stdin: |
+      var=value
+      prompt="\${var:+\[text\]}"
+      echo "Conditional (set): '${prompt@P}'"
+
+      var=
+      prompt="\${var:+\[text\]}"
+      echo "Conditional (unset): '${prompt@P}'"
+
+  - name: "Command substitution in prompt and exit code"
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      PS1='$(echo Hello)> '
+      false
+      echo $?
+
+  - name: "Brackets and var"
+    stdin: |
+      prompt='\[$var\]\u > '
+      echo "Prompt: ${prompt@P}"
+
+  - name: "Brackets and var (interactive mode)"
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      prompt='\[$var\]\u > '
+      echo "Prompt: ${prompt@P}"
+
+  # The following cases exercise double-quote escape semantics in the second
+  # pass of prompt expansion: a backslash only escapes (and is consumed by)
+  # one of the same characters it would escape inside a double-quoted string;
+  # for any other character, the backslash is preserved literally.
+  #
+  # We pipe the expansion result through hexdump -C to get a deterministic
+  # byte-level view, avoiding any divergence in `printf '%q'` formatting.
+  - name: "Backslash-CR survives prompt expansion (issue #1119)"
+    stdin: |
+      # OSC 133;C followed by ST (\e\\) and CR. The ST must end with a literal
+      # backslash byte (0x5c); without it, the OSC is malformed and terminals
+      # may eat the first character of subsequent output.
+      prompt='\e]133;C\e\\\r'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Backslash before non-special char preserves backslash"
+    stdin: |
+      # Under double-quote escape rules, a backslash before a non-special
+      # character is preserved literally. \\X (raw) = '\' + 'X' should expand
+      # to literal '\X'.
+      prompt='\\X'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt='\\Z'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt='\\n'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt=$'\\\\\t'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Backslash before dollar escapes parameter expansion"
+    stdin: |
+      # `\\$VAR` (PS0 raw chars: \\, $, V, A, R) → step 1 produces \$VAR, then
+      # step 2's `\$` consumes the backslash and leaves a literal $, so $VAR
+      # remains literal (not expanded).
+      var=hello
+      prompt='\\$var'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Double backslash before dollar yields backslash + expansion"
+    stdin: |
+      # `\\\\$VAR` → step 1 produces \\$VAR, then step 2's `\\` reduces to a
+      # literal `\` and `$VAR` is expanded normally.
+      var=hello
+      prompt='\\\\$var'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Backslash before escaped dollar"
+    stdin: |
+      # `\\\$` → step 1 produces \$ (Backslash + DollarOrPound). Step 2 keeps
+      # the literal backslash and the literal $, so the result is `\$`.
+      prompt='\\\$'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Many backslashes before non-special"
+    stdin: |
+      # Each `\\` in step 1 produces a literal `\`. Step 2 reduces consecutive
+      # backslashes pairwise.
+      prompt='\\\\\\\\X'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt=$'\\\\\\\\\r'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Backslash before newline is line continuation"
+    stdin: |
+      # `\\\n` produces (Backslash, Newline) → \<LF> in formatted prompt.
+      # In double-quote escape rules, \<newline> is line continuation and
+      # consumes both characters.
+      prompt='\\\n'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      # Same expected behavior when the LF byte is supplied directly.
+      prompt=$'\\\\\n'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Trailing literal backslash survives"
+    stdin: |
+      # `\\` at end of prompt should produce a single literal backslash.
+      prompt='\\'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      # `\\X\\` should produce `\X\`.
+      prompt='\\X\\'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Backslash followed by working-dir prompt piece"
+    stdin: |
+      # Make sure prompt pieces whose formatted output happens to contain `\`
+      # (e.g., AsciiCharacter for octal `\134`) survive intact.
+      prompt='\134'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      # `\\\w` should yield `\<cwd>`. Use a fixed cwd so brush vs. oracle
+      # output is deterministic.
+      cd /
+      prompt='\\\w'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+  - name: "Bare \\$ leaves no protective backslash (issue #1167)"
+    stdin: |
+      # `\$` alone must format to a bare `$` or `#` — pass 1's protective `\`
+      # must not leak when the resulting char (e.g. `#` for root) isn't
+      # double-quote-escapable.
+      prompt='\$'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      # Same in a context where promptvars would otherwise re-expand a bare $:
+      var=SHOULD_NOT_APPEAR
+      prompt='\$var'
+      shopt -s promptvars
+      printf '%s' "${prompt@P}" | hexdump -C
+      shopt -u promptvars
+
+  - name: "Backslash adjacent to unrecognized escape sequence"
+    stdin: |
+      # `\\\X` (Backslash + EscapedSequence(\X)) must reduce to a single `\X`.
+      # An over-eager protective `\` on the EscapedSequence would leak (X
+      # isn't dq-escapable) and emit `\\X`.
+      prompt='\\\X'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt='\\\?'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      # X here is dq-escapable, so pass 2 consumes the EscapedSequence's own
+      # `\` and emits just the literal char.
+      prompt='\"'
+      printf '%s' "${prompt@P}" | hexdump -C
+
+      prompt='\`'
+      printf '%s' "${prompt@P}" | hexdump -C

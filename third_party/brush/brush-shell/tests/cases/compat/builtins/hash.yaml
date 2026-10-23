@@ -1,0 +1,212 @@
+name: "Builtins: hash"
+cases:
+  - name: "Non-existent program"
+    ignore_stderr: true
+    stdin: |
+      hash non-existent-program
+      echo "Result: $?"
+
+  - name: "Re-hash non-existent program"
+    ignore_stderr: true
+    stdin: |
+      hash -p /some/path non-existent-program
+      hash -t non-existent-program && echo "1. Result: $?"
+      hash non-existent-program && echo "2. Result: $?"
+      hash -t non-existent-program && echo "3. Result: $?"
+
+  - name: "Existent program"
+    stdin: |
+      hash ls
+      echo "Result: $?"
+
+  - name: "Display not-yet-hashed program"
+    ignore_stderr: true
+    stdin: |
+      hash -t ls
+      echo "1. Result: $?"
+      ls >/dev/null 2>&1
+      hash -t ls
+      echo "2. Result: $?"
+
+  - name: "Display hashed program"
+    stdin: |
+      hash -p /some/path somecmd && echo "1. Result: $?"
+      hash -t somecmd && echo "2. Result: $?"
+
+  - name: "Display multiple hashed programs"
+    stdin: |
+      hash -p /some/path somecmd1 && echo "1. Result: $?"
+      hash -p /some/path somecmd2 && echo "2. Result: $?"
+      hash -t somecmd1 somecmd2 && echo "3. Result: $?"
+
+  - name: "Display -l path"
+    stdin: |
+      hash -p "/some/spaces path" somecmd && echo "1. Result: $?"
+      hash -t somecmd && echo "2. Result: $?"
+      hash -t -l somecmd && echo "3. Result: $?"
+
+  - name: "Remove"
+    ignore_stderr: true
+    stdin: |
+      hash -p /some/path somecmd && echo "1. Result: $?"
+      hash -t somecmd && echo "2. Result: $?"
+      hash -d somecmd && echo "3. Result: $?"
+      hash -t somecmd && echo "4. Result: $?"
+
+  - name: "Remove all"
+    ignore_stderr: true
+    stdin: |
+      hash -p /some/path somecmd1 && echo "1. Result: $?"
+      hash -p /some/path somecmd2 && echo "2. Result: $?"
+      hash -r && echo "3. Result: $?"
+      hash -t somecmd1 && echo "4. Result: $?"
+      hash -t somecmd2 && echo "5. Result: $?"
+
+  - name: "Hash file path"
+    ignore_stderr: true
+    stdin: |
+      hash /dev/null && echo "1. Result: $?"
+      hash /dev/nulll && echo "2. Result: $?"
+
+  - name: "hash -p refuses a directory"
+    stdin: |
+      # Normalize away the leading "shell: line N:" that the oracle prefixes onto diagnostics.
+      strip() { sed 's/^.*hash:/hash:/'; }
+
+      mkdir -p adir
+      touch afile
+
+      echo "[a directory is refused]"
+      hash -p adir z1 2>&1 | strip; echo "rc=${PIPESTATUS[0]}"
+      # The pipeline above ran in a subshell, so re-run it here to check the table itself.
+      hash -p adir z1 2>/dev/null; echo "rc=$?"
+      hash -t z1 2>&1 | strip; echo "rc=${PIPESTATUS[0]}"
+
+      echo "[any other path is taken at face value]"
+      hash -p afile z2; echo "rc=$?"
+      hash -p /nonexistent/x z3; echo "rc=$?"
+      hash -t z2 z3; echo "rc=$?"
+
+      echo "[refused once per name]"
+      hash -p adir bad1 bad2 2>&1 | strip; echo "rc=${PIPESTATUS[0]}"
+
+      echo "[a relative path resolves against the shell's working directory]"
+      mkdir -p sub/reldir sub2
+      cd sub
+      hash -p reldir z4 2>&1 | strip; echo "rc=${PIPESTATUS[0]}"
+      cd ../sub2
+      # ../sub/reldir exists, but 'reldir' does not from here, so this is just a path.
+      hash -p reldir z5 2>/dev/null; echo "rc=$?"
+      hash -t z5; echo "rc=$?"
+      cd ..
+
+      echo "[hash NAME stays strict about executables]"
+      mkdir -p d1; touch d1/only
+      PATH="d1:$PATH"
+      hash only 2>&1 | strip; echo "rc=${PIPESTATUS[0]}"
+
+  #
+  # `hash` with no names lists the table. brush prints nothing for any such listing,
+  # whether the table is empty or populated, so these are marked `known_failure`. Hit
+  # counts get their own case: they can only be observed through the listing, but they
+  # are a separate gap and a fix for one need not be a fix for the other.
+  #
+  - name: "Display the whole table"
+    known_failure: true # TODO(hash): `hash` with no names should list the table
+    stdin: |
+      echo "[empty]"
+      hash; echo "rc=$?"
+
+      echo "[populated, in insertion order]"
+      hash -p /some/path sc1
+      hash -p /other/path sc2
+      hash; echo "rc=$?"
+
+      echo "[emptied again]"
+      hash -r
+      hash; echo "rc=$?"
+
+  - name: "Display the whole table in reusable form"
+    known_failure: true # TODO(hash): `hash -l` with no names should list the table
+    stdin: |
+      hash -p /some/path sc1
+      hash -p "/some/spaces path" sc2
+
+      hash -l; echo "rc=$?"
+
+  - name: "Count hits per hashed command"
+    known_failure: true # TODO(hash): hit counts are not tracked
+    stdin: |
+      # Normalize away the temporary directory the test runs in.
+      scrub() { sed -E "s|$PWD|<TMPDIR>|g"; }
+
+      printf '#!/bin/sh\n:\n' > prog
+      chmod +x prog
+      PATH="$PWD:$PATH"
+
+      prog
+      prog
+      hash | scrub; echo "rc=${PIPESTATUS[0]}"
+
+  - name: "Assigning PATH empties the table"
+    known_failure: true # TODO(hash): assigning PATH doesn't empty the table, so a command keeps being run from a directory no longer in PATH
+    ignore_stderr: true # How shells word what's not found differs
+    test_files:
+      - path: "x/prog"
+        executable: true
+        contents: |
+          #!/bin/sh
+          echo "prog in x"
+      - path: "y/.keep"
+    stdin: |
+      PATH="${PWD}/x"
+      prog
+      PATH="${PWD}/y"
+      prog; echo "status: $?"
+
+  - name: "Hash a path starting with a dot"
+    stdin: |
+      hash -p .nosuch foo
+      hash -t foo; echo "status: $?"
+
+  - name: "Hash paths starting with a dot, as given"
+    test_files:
+      - path: "sub/prog"
+        executable: true
+        contents: |
+          #!/bin/sh
+          echo "0=$0"
+    stdin: |
+      cd sub
+      for path in ./././prog .//prog; do
+        hash -p "${path}" p
+        p
+        hash -t p
+      done
+      for path in ./nosuch/ ./nosuch//; do
+        hash -p "${path}" foo
+        hash -t foo; echo "status: $?"
+      done
+
+  - name: "Hash a builtin or function"
+    known_failure: true # TODO(hash): hashing a builtin's name hashes a program of that name, and a function's fails, where bash does neither
+    ignore_stderr: true # How shells word what's not found differs
+    stdin: |
+      f() { :; }
+      hash echo; echo "echo: $?"
+      hash f; echo "f: $?"
+      hash -t echo; echo "hashed: $?"
+
+  - name: "command -p hashes what it finds"
+    known_failure: true # TODO(hash): `command -p` doesn't hash the program it finds
+    stdin: |
+      command -p cat </dev/null
+      hash -t cat; echo "status: $?"
+
+  - name: "Run a hashed path that doesn't exist"
+    known_failure: true # TODO(hash): running a hashed path that doesn't exist reports the command as not found, not the path as missing
+    ignore_stderr: true
+    stdin: |
+      hash -p /no/such/prog prog
+      prog; echo "status: $?"
+      prog 2>&1 | grep -q 'No such file' && echo "says no such file" || echo "says something else"

@@ -1,0 +1,555 @@
+use clap::{Parser, builder::TypedValueParser as _};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::io::Write;
+use strum::{EnumMessage, IntoEnumIterator};
+
+use brush_core::completion::{self, CompleteAction, CompleteOption, Spec, SpecName, SpecialSpec};
+use brush_core::{ExecutionExitCode, ExecutionResult, builtins, escape};
+
+#[derive(Parser)]
+struct CommonCompleteCommandArgs {
+    /// Options governing the behavior of completions.
+    #[arg(short = 'o', value_parser = name_parser::<CompleteOption>())]
+    options: Vec<CompleteOption>,
+
+    /// Actions to apply to generate completions.
+    #[arg(short = 'A', value_parser = name_parser::<CompleteAction>())]
+    actions: Vec<CompleteAction>,
+
+    /// File glob pattern to be expanded to generate completions.
+    #[arg(short = 'G', allow_hyphen_values = true, value_name = "GLOB")]
+    glob_pattern: Option<String>,
+
+    /// List of words that will be considered as completions.
+    #[arg(short = 'W', allow_hyphen_values = true)]
+    word_list: Option<String>,
+
+    /// Name of a shell function to invoke to generate completions.
+    #[arg(short = 'F', allow_hyphen_values = true, value_name = "FUNC_NAME")]
+    function_name: Option<String>,
+
+    /// Command to execute to generate completions.
+    #[arg(short = 'C', allow_hyphen_values = true)]
+    command: Option<String>,
+
+    /// Pattern used as filter for completions.
+    #[arg(short = 'X', allow_hyphen_values = true, value_name = "PATTERN")]
+    filter_pattern: Option<String>,
+
+    /// Prefix pattern used as filter for completions.
+    #[arg(short = 'P', allow_hyphen_values = true)]
+    prefix: Option<String>,
+
+    /// Suffix pattern used as filter for completions.
+    #[arg(short = 'S', allow_hyphen_values = true)]
+    suffix: Option<String>,
+
+    /// Actions selected with their own flags (e.g. `-a`).
+    #[clap(flatten)]
+    action_flags: ActionFlags,
+}
+
+/// Returns a parser for the name of one of `E`'s variants (e.g. `alias` for
+/// [`CompleteAction::Alias`]), which lists the names, and describes each with its docs.
+fn name_parser<E>() -> impl clap::builder::TypedValueParser<Value = E>
+where
+    E: IntoEnumIterator + EnumMessage + std::str::FromStr + Clone + Send + Sync + 'static,
+    &'static str: From<E>,
+    E::Err: std::error::Error + Send + Sync + 'static,
+{
+    let names = E::iter().map(|variant| {
+        let help = help_for(&variant);
+        clap::builder::PossibleValue::new(<&'static str>::from(variant)).help(help)
+    });
+    clap::builder::PossibleValuesParser::new(names).try_map(|name| name.parse::<E>())
+}
+
+/// Returns the help for `variant`: its docs, without a trailing period, as clap shows help.
+fn help_for(variant: &impl EnumMessage) -> &'static str {
+    let docs = variant.get_documentation().unwrap_or_default();
+    docs.strip_suffix('.').unwrap_or(docs)
+}
+
+/// The actions with flags of their own in `complete` and `compgen`, and those flags (e.g.
+/// `a`, for `-a`, which is short for `-A alias`), in the order bash shows them. Each flag
+/// is also its argument's clap ID.
+const ACTION_FLAGS: [(&str, CompleteAction); 12] = [
+    ("a", CompleteAction::Alias),
+    ("b", CompleteAction::Builtin),
+    ("c", CompleteAction::Command),
+    ("d", CompleteAction::Directory),
+    ("e", CompleteAction::Export),
+    ("f", CompleteAction::File),
+    ("g", CompleteAction::Group),
+    ("j", CompleteAction::Job),
+    ("k", CompleteAction::Keyword),
+    ("s", CompleteAction::Service),
+    ("u", CompleteAction::User),
+    ("v", CompleteAction::Variable),
+];
+
+/// The actions selected with their own flags (see [`ACTION_FLAGS`]), which this parses.
+struct ActionFlags(Vec<CompleteAction>);
+
+impl clap::FromArgMatches for ActionFlags {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        let actions = ACTION_FLAGS
+            .iter()
+            .filter(|(flag, _)| matches.get_flag(flag))
+            .map(|(_, action)| *action)
+            .collect();
+        Ok(Self(actions))
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl clap::Args for ActionFlags {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        ACTION_FLAGS.iter().fold(cmd, |cmd, (flag, action)| {
+            cmd.arg(
+                clap::Arg::new(*flag)
+                    .short(flag.chars().next())
+                    .action(clap::ArgAction::SetTrue)
+                    .help(help_for(action)),
+            )
+        })
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        Self::augment_args(cmd)
+    }
+}
+
+impl CommonCompleteCommandArgs {
+    fn create_spec(&self) -> completion::Spec {
+        completion::Spec {
+            options: self.options.iter().copied().collect(),
+            actions: self.resolve_actions(),
+            glob_pattern: self.glob_pattern.clone(),
+            word_list: self.word_list.clone(),
+            function_name: self.function_name.clone(),
+            command: self.command.clone(),
+            filter_pattern: self.filter_pattern.clone(),
+            prefix: self.prefix.clone(),
+            suffix: self.suffix.clone(),
+        }
+    }
+
+    /// Returns the actions selected, like bash, each once, in the fixed order bash runs them
+    /// in (that of [`CompleteAction`]'s variants), however they were given.
+    fn resolve_actions(&self) -> Vec<CompleteAction> {
+        let selected: Vec<_> = self.actions.iter().chain(&self.action_flags.0).collect();
+        CompleteAction::iter()
+            .filter(|action| selected.contains(&action))
+            .collect()
+    }
+}
+
+/// Configure programmable command completion.
+#[derive(Parser)]
+pub(crate) struct CompleteCommand {
+    /// Display registered completion settings.
+    #[arg(short = 'p')]
+    print: bool,
+
+    /// Remove the completion settings associated with the given command.
+    #[arg(short = 'r')]
+    remove: bool,
+
+    /// Apply these settings to the default completion scenario.
+    #[arg(short = 'D')]
+    use_as_default: bool,
+
+    /// Apply these settings to completion of empty lines.
+    #[arg(short = 'E')]
+    use_for_empty_line: bool,
+
+    /// Apply these settings to completion of the initial word of the input line.
+    #[arg(short = 'I')]
+    use_for_initial_word: bool,
+
+    #[clap(flatten)]
+    common_args: CommonCompleteCommandArgs,
+
+    names: Vec<String>,
+}
+
+/// Returns the flag that selects a special completion spec in `complete` and `compopt`.
+const fn special_spec_flag(special: SpecialSpec) -> &'static str {
+    match special {
+        SpecialSpec::Default => "-D",
+        SpecialSpec::EmptyLine => "-E",
+        SpecialSpec::InitialWord => "-I",
+    }
+}
+
+/// Returns the operand that names the spec `name` in a `complete` or `compopt` command that
+/// `complete -p` or `compopt` prints: a special spec's flag, or the command's name, quoted
+/// if needed.
+fn spec_name_operand(name: SpecName<'_>) -> Cow<'_, str> {
+    match name {
+        SpecName::Special(special) => special_spec_flag(special).into(),
+        SpecName::Command(command) => {
+            escape::quote_if_needed(command, escape::QuoteMode::SingleQuote)
+        }
+    }
+}
+
+brush_clap_adapter::impl_parse_args!(CompleteCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CompleteCommand {
+    type Error = brush_core::Error;
+
+    async fn execute(
+        self,
+        mut context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        // Like bash, -D, -E, or -I name a special spec in place of any names given; they
+        // take precedence in that order.
+        let special = [
+            (self.use_as_default, SpecialSpec::Default),
+            (self.use_for_empty_line, SpecialSpec::EmptyLine),
+            (self.use_for_initial_word, SpecialSpec::InitialWord),
+        ]
+        .into_iter()
+        .find_map(|(selected, special)| selected.then_some(special));
+        let names: Vec<SpecName<'_>> = match special {
+            Some(special) => vec![SpecName::Special(special)],
+            None => self
+                .names
+                .iter()
+                .map(|name| SpecName::parse(name))
+                .collect(),
+        };
+
+        // With no spec named, list them all (as `complete` with no options does too), or
+        // with `-r`, remove them all.
+        if names.is_empty() {
+            if self.remove && !self.print {
+                context.shell.completion_config_mut().clear();
+            } else {
+                // Sort, so the listing is stable; the special specs come last.
+                let mut specs: Vec<_> = context.shell.completion_config().iter().collect();
+                specs.sort_by_key(|(name, _)| *name);
+                for (name, spec) in specs {
+                    Self::display_spec(&context, name, spec)?;
+                }
+            }
+            return Ok(ExecutionResult::success());
+        }
+
+        let mut result = ExecutionResult::success();
+        for name in names {
+            if !self.try_process_for_command(&mut context, name)? {
+                result = ExecutionResult::general_error();
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+impl CompleteCommand {
+    fn try_display_spec_for_command(
+        context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+        name: SpecName<'_>,
+    ) -> Result<bool, brush_core::Error> {
+        if let Some(spec) = context.shell.completion_config().get(name) {
+            Self::display_spec(context, name, spec)?;
+            Ok(true)
+        } else {
+            writeln!(
+                context.stderr(),
+                "complete: {}: no completion specification",
+                name.as_str()
+            )?;
+            Ok(false)
+        }
+    }
+
+    /// Displays `spec`, registered under `name`, as the `complete` command that recreates
+    /// it, formatted as bash does.
+    fn display_spec(
+        context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+        name: SpecName<'_>,
+        spec: &Spec,
+    ) -> Result<(), brush_core::Error> {
+        let mut s = String::from("complete");
+
+        // Options, in the order bash shows them.
+        let options = &spec.options;
+        for option in CompleteOption::iter().filter(|option| options.get(*option)) {
+            write!(s, " -o {}", <&str>::from(option))?;
+        }
+
+        // Like bash, show each action once: those with their own flag first, then the rest
+        // with `-A`, each in the order bash lists them.
+        for (flag, action) in &ACTION_FLAGS {
+            if spec.actions.contains(action) {
+                write!(s, " -{flag}")?;
+            }
+        }
+        for action in CompleteAction::iter() {
+            if spec.actions.contains(&action) && !ACTION_FLAGS.iter().any(|(_, a)| *a == action) {
+                write!(s, " -A {}", <&str>::from(action))?;
+            }
+        }
+
+        for (flag, arg) in [
+            ("-G", spec.glob_pattern.as_ref()),
+            ("-W", spec.word_list.as_ref()),
+            ("-P", spec.prefix.as_ref()),
+            ("-S", spec.suffix.as_ref()),
+            ("-X", spec.filter_pattern.as_ref()),
+            ("-C", spec.command.as_ref()),
+        ] {
+            if let Some(arg) = arg {
+                let arg = escape::force_quote(arg, escape::QuoteMode::SingleQuote);
+                write!(s, " {flag} {arg}")?;
+            }
+        }
+        if let Some(function_name) = &spec.function_name {
+            let function_name =
+                escape::quote_if_needed(function_name, escape::QuoteMode::SingleQuote);
+            write!(s, " -F {function_name}")?;
+        }
+
+        // Like bash, the spec's name comes last.
+        writeln!(context.stdout(), "{s} {}", spec_name_operand(name))?;
+
+        Ok(())
+    }
+
+    fn try_process_for_command(
+        &self,
+        context: &mut brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+        name: SpecName<'_>,
+    ) -> Result<bool, brush_core::Error> {
+        if self.print {
+            return Self::try_display_spec_for_command(context, name);
+        } else if self.remove {
+            let mut result = context.shell.completion_config_mut().remove(name);
+
+            if !result {
+                if context.shell.options().interactive {
+                    writeln!(context.stderr(), "complete: {}: not found", name.as_str())?;
+                } else {
+                    // For some reason, this is not supposed to be treated as a failure
+                    // in non-interactive execution.
+                    result = true;
+                }
+            }
+
+            return Ok(result);
+        }
+
+        let config = self.common_args.create_spec();
+
+        context.shell.completion_config_mut().set(name, config);
+
+        Ok(true)
+    }
+}
+
+/// Generate command completions.
+#[derive(Parser)]
+pub(crate) struct CompGenCommand {
+    #[clap(flatten)]
+    common_args: CommonCompleteCommandArgs,
+
+    // N.B. The word can only start with a hyphen if it's after a --.
+    word: Option<String>,
+}
+
+brush_clap_adapter::impl_parse_args!(CompGenCommand);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CompGenCommand {
+    type Error = brush_core::Error;
+
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        let spec = self.common_args.create_spec();
+        let word = self.word.as_deref().unwrap_or_default();
+        let candidates = spec.generate(context.shell, word).await?;
+
+        // We are expected to return 1 if there are no candidates, even if no errors
+        // occurred along the way.
+        if candidates.is_empty() {
+            return Ok(ExecutionResult::general_error());
+        }
+
+        for candidate in candidates {
+            writeln!(context.stdout(), "{candidate}")?;
+        }
+
+        Ok(ExecutionResult::success())
+    }
+}
+
+/// Set programmable command completion options.
+#[derive(Parser)]
+pub(crate) struct CompOptCommand {
+    /// Update the default completion settings.
+    #[arg(short = 'D')]
+    update_default: bool,
+
+    /// Update the completion settings for empty lines.
+    #[arg(short = 'E')]
+    update_empty: bool,
+
+    /// Update the completion settings for the initial word of the input line.
+    #[arg(short = 'I')]
+    update_initial_word: bool,
+
+    /// Enable the specified option for selected completion scenarios.
+    #[arg(short = 'o', value_name = "OPT", value_parser = name_parser::<CompleteOption>())]
+    enabled_options: Vec<CompleteOption>,
+    #[arg(long = "+o", hide = true, value_parser = name_parser::<CompleteOption>())]
+    disabled_options: Vec<CompleteOption>,
+
+    /// If specified, scopes updates to completions of the named commands.
+    names: Vec<String>,
+}
+
+brush_clap_adapter::impl_parse_args!(CompOptCommand, plus_options);
+
+impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CompOptCommand {
+    type Error = brush_core::Error;
+
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        // Like bash, an option given with both `-o` and `+o` is disabled, whatever their
+        // order.
+        let mut options =
+            HashMap::with_capacity(self.disabled_options.len() + self.enabled_options.len());
+        for option in &self.enabled_options {
+            options.insert(*option, true);
+        }
+        for option in &self.disabled_options {
+            options.insert(*option, false);
+        }
+
+        if !self.names.is_empty()
+            && (self.update_default || self.update_empty || self.update_initial_word)
+        {
+            writeln!(
+                context.stderr(),
+                "compopt: cannot specify names with -D, -E, or -I"
+            )?;
+            return Ok(ExecutionExitCode::InvalidUsage.into());
+        }
+
+        // -D, -E, and -I select a special spec, which, like bash, messages name by bash's name
+        // for it.
+        let special = [
+            (self.update_default, SpecialSpec::Default),
+            (self.update_empty, SpecialSpec::EmptyLine),
+            (self.update_initial_word, SpecialSpec::InitialWord),
+        ]
+        .into_iter()
+        .find_map(|(selected, special)| selected.then_some(special));
+        let names: Vec<SpecName<'_>> = match special {
+            Some(special) => vec![SpecName::Special(special)],
+            None => self
+                .names
+                .iter()
+                .map(|name| SpecName::parse(name))
+                .collect(),
+        };
+
+        if !names.is_empty() {
+            // Like bash, a spec that doesn't exist is an error, rather than being created.
+            // With no options to set, each spec's options are shown instead.
+            let mut result = ExecutionResult::success();
+            for name in names {
+                let found = if options.is_empty() {
+                    match context.shell.completion_config().get(name) {
+                        Some(spec) => {
+                            Self::display_options(&context, name, &spec.options)?;
+                            true
+                        }
+                        None => false,
+                    }
+                } else if let Some(spec) = context.shell.completion_config_mut().get_mut(name) {
+                    Self::set_options_for_spec(spec, &options);
+                    true
+                } else {
+                    false
+                };
+                if !found {
+                    writeln!(
+                        context.stderr(),
+                        "compopt: {}: no completion specification",
+                        name.as_str()
+                    )?;
+                    result = ExecutionResult::general_error();
+                }
+            }
+            return Ok(result);
+        }
+
+        // With no names, apply to the completion in progress, if there is one, or with no
+        // options to set, show its options.
+        if options.is_empty() {
+            if let Some(in_progress) = context.shell.in_progress_completion() {
+                Self::display_options(&context, in_progress.spec_name(), in_progress.options())?;
+                return Ok(ExecutionResult::success());
+            }
+        } else if let Some(in_progress_options) = context.shell.in_progress_completion_options_mut()
+        {
+            Self::set_options(in_progress_options, &options);
+            return Ok(ExecutionResult::success());
+        }
+
+        writeln!(
+            context.stderr(),
+            "compopt: not currently executing completion function"
+        )?;
+        Ok(ExecutionResult::general_error())
+    }
+}
+
+impl CompOptCommand {
+    /// Displays `options`, those of the spec `name`, as the `compopt` command that sets
+    /// them: each option enabled (`-o`) or disabled (`+o`), formatted as bash does.
+    fn display_options(
+        context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+        name: SpecName<'_>,
+        options: &completion::GenerationOptions,
+    ) -> Result<(), brush_core::Error> {
+        let mut s = String::from("compopt");
+        for option in CompleteOption::iter() {
+            let sign = if options.get(option) { '-' } else { '+' };
+            write!(s, " {sign}o {}", <&str>::from(option))?;
+        }
+        writeln!(context.stdout(), "{s} {}", spec_name_operand(name))?;
+
+        Ok(())
+    }
+
+    fn set_options_for_spec<'a, I>(spec: &mut Spec, options: I)
+    where
+        I: IntoIterator<Item = (&'a CompleteOption, &'a bool)>,
+    {
+        Self::set_options(&mut spec.options, options);
+    }
+
+    fn set_options<'a, I>(target_options: &mut completion::GenerationOptions, options: I)
+    where
+        I: IntoIterator<Item = (&'a CompleteOption, &'a bool)>,
+    {
+        for (option, value) in options {
+            target_options.set(*option, *value);
+        }
+    }
+}

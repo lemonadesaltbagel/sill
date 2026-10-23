@@ -1,0 +1,20 @@
+{
+    "editor.formatOnSave": true,
+    "files.exclude": {
+        "target/": true
+    },
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+        "bash": {
+            "path": "/bin/bash"
+        }
+    },
+    "rust-analyzer.check.command": "clippy",
+    "rewrap.wrappingColumn": 90,
+    "rust-analyzer.debug.openDebugPane": true,
+    "rust-analyzer.testExplorer": true,
+    "rust-analyzer.check.features": "all",
+    "rust-analyzer.check.allTargets": true,
+    "rust-analyzer.check.workspace": true,
+    "sarif-viewer.connectToGithubCodeScanning": "on",
+}

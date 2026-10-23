@@ -1,0 +1,15 @@
+name: "Builtins: unalias"
+cases:
+  - name: "Unalias basic usage"
+    stdin: |
+      shopt -s expand_aliases
+      alias echo='echo prefixed'
+      echo 'something'
+      unalias echo
+      echo 'something'
+
+  - name: "Unalias non-existent alias"
+    ignore_stderr: true # Slightly different error messages
+    stdin: |
+      shopt -s expand_aliases
+      unalias not_an_alias

@@ -1,0 +1,67 @@
+name: "caller builtin"
+cases:
+  - name: "caller in function"
+    test_files:
+      - path: script.sh
+        contents: |
+          function outer() {
+              echo "In outer"
+              inner
+          }
+
+          function inner() {
+              echo "In inner"
+
+              echo "[Calling caller 0]"
+              caller 0
+
+              echo "[Calling caller 1]"
+              caller 1
+          }
+    stdin: |
+      source script.sh
+      outer
+
+  - name: "caller no args"
+    known_failure: true # TODO(caller): needs investigation
+    test_files:
+      - path: script.sh
+        contents: |
+          function myfunc() {
+              echo "In myfunc"
+              caller
+          }
+    stdin: |
+      source script.sh
+      myfunc
+
+  - name: "caller no args (nested)"
+    test_files:
+      - path: script.sh
+        contents: |
+          function myfunc() {
+              echo "In myfunc"
+              caller
+          }
+
+          function myouterfunc() {
+              echo "In myouterfunc"
+              myfunc
+          }
+    stdin: |
+      source script.sh
+      myouterfunc
+
+  - name: "caller invalid expr"
+    ignore_stderr: true # Different error messages
+    stdin: |
+      f() { caller x; }
+      f
+
+  - name: "caller out of range"
+    stdin: |
+      caller 100
+
+  - name: "caller not in function"
+    stdin: |
+      caller

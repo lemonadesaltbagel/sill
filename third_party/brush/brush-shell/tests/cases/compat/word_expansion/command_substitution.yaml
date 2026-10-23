@@ -1,0 +1,417 @@
+name: "Command substitution"
+cases:
+  - name: "Command substitution"
+    stdin: |
+      var="value"
+
+      echo "1:"
+      echo $(echo hi)
+      echo "2:"
+      echo "$(echo hi)"
+      echo "3:"
+      echo "$(echo "hi")"
+      echo "4:"
+      echo "$(var="updated"; echo ${var})"
+      echo "var=${var}"
+
+  - name: "Command substitution with embedded parens"
+    stdin: |
+      x=$(echo foo | (wc -l; echo hi))
+      echo "\$x: $x"
+
+  - name: "Command substitution containing case patterns without ( (sill)"
+    stdin: |
+      echo $(case a in a) echo plain;; esac)
+      echo "$(case a in *";"*) echo semi;; *) echo other;; esac)"
+      echo $(case b in (a) echo A;; b|c) echo BC;; esac)
+      echo $(case a in a) case b in b) echo nested;; esac;; esac)
+      echo $(case x in x) (echo subshell);; esac)
+      echo $(for c in a b; do case $c in a) printf A;; *) printf O;; esac; done)
+      echo $(case a in
+      a)
+        echo multiline
+        ;;
+      esac)
+      echo $(echo case in esac) $(case a in a) echo x;& b) echo fall;; esac)
+
+  - name: "Command substitution with subshell"
+    stdin: |
+      x=$( (echo hi) )
+      echo "\$x: $x"
+
+  - name: "Command substitution exit code"
+    stdin: |
+      x=$(false) && echo "1. Made it past false"
+      y=$(true) && echo "2. Made it past true"
+
+  - name: "Command substitution with exec"
+    stdin: |
+      x=$(exec echo hi)
+      echo "x: $x"
+
+  - name: "Backtick command substitution"
+    stdin: |
+      echo `echo hi`
+
+  - name: "Backtick command substitution with escaping"
+    stdin: |
+      echo `echo \`echo hi\``
+
+  - name: "Backtick command substitution with backslashes"
+    stdin: |
+      echo `echo \\`
+
+  - name: "Backtick command substitution with trailing backslashes"
+    stdin: |
+      y=`printf %s \\`
+      printf 'two: <%s> len=%s\n' "$y" "${#y}"
+      y=`printf %s \\\\`
+      printf 'four: <%s> len=%s\n' "$y" "${#y}"
+      y=`printf %s \\\\\\`
+      printf 'six: <%s> len=%s\n' "$y" "${#y}"
+
+  - name: "Backtick command substitution escape rules"
+    stdin: |
+      HOME=abc
+      printf '<%s>\n' `printf '%s\n' \\\\2`
+      echo `echo \$HOME`
+      echo `echo \\$HOME`
+      echo `echo \"q\"`
+      echo `echo 'a\"b'`
+
+  - name: "Backtick command substitution escape rules in double quotes"
+    stdin: |
+      HOME=abc
+      echo "`echo \\\\a`"
+      echo "`echo \$HOME \\$HOME`"
+      y=
+      echo "${y:-`echo \"q\"`}"
+
+  - name: "Backtick command substitution unescaping double quotes in double quotes"
+    known_failure: true # TODO(parser): in backquotes directly within double quotes (not in a `${...}` within them), a backslash before `"` is removed
+    stdin: |
+      echo "`echo \"q\"`"
+      echo "`echo 'a\"b'`"
+
+  - name: "Backtick command substitution line continuations"
+    stdin: |
+      echo `echo e\
+      cho`
+      echo `echo 'a\
+      b'`
+      echo "`echo 'a\
+      b'`"
+
+  - name: "Backtick command substitution in double quotes"
+    stdin: |
+      echo "`echo First line`"
+      echo " `echo Second line` "
+      echo "Third`echo line`here"
+
+  - name: "Ignore single quote in comment in command substitution"
+    stdin: |
+      var=$(
+        # I'm
+        echo "Batman"
+      )
+      echo $var
+
+  - name: "Ignore double quote in comment in command substitution"
+    stdin: |
+      var=$(
+        # This " is not being
+        echo "parsed"
+      )
+      echo $var
+
+  - name: "Ignore parentheses in comment in command substitution"
+    stdin: |
+      var=$(
+        # :(
+        echo "Sad"
+      )
+      echo $var
+
+  - name: "Ignore dollar in comment in command substitution"
+    stdin: |
+      var=$(
+        #               $
+        echo "Mr. Crabs ^"
+      )
+      echo $var
+
+  - name: "Positional parameter count not mistaken for comment"
+    stdin: |
+      echo $(echo $#)
+
+  - name: "Comment after blanks in command substitution"
+    stdin: |
+      echo "0 blanks: $(# I'm a comment
+      echo hi)"
+      echo "1 blank: $( # I'm a comment
+      echo hi)"
+      echo "2 blanks: $(  # I'm a comment
+      echo hi)"
+      echo "3 blanks: $(   # I'm a comment
+      echo hi)"
+
+  - name: "Comment after tabs in command substitution"
+    stdin: |
+      echo "1 tab: $(	# I'm a comment
+      echo hi)"
+      echo "2 tabs: $(		# I'm a comment
+      echo hi)"
+      echo "blank and tab: $( 	# I'm a comment
+      echo hi)"
+
+  - name: "Hash after blanks that is not a comment in command substitution"
+    stdin: |
+      echo "1: $( echo a#b )"
+      echo "2: $( echo 'a # b' )"
+      echo "3: $( echo one # I'm a trailing comment
+      echo two)"
+      echo "4: $(cat <<HERE
+       # not a comment
+      HERE
+      )"
+
+  - name: "Ignore single quote in comment in command substitution (backticks)"
+    stdin: |
+      var=`
+        # I'm
+        echo "Batman"
+      `
+      echo $var
+
+  - name: "Ignore double quote in comment in command substitution (backticks)"
+    stdin: |
+      var=`
+        # This " is not being
+        echo "parsed"
+      `
+      echo $var
+
+  - name: "Ignore parentheses in comment in command substitution (backticks)"
+    stdin: |
+      var=`
+        # :(
+        echo "Sad"
+      `
+      echo $var
+
+  - name: "Ignore dollar in comment in command substitution (backticks)"
+    stdin: |
+      var=`
+        #               $
+        echo "Mr. Crabs ^"
+      `
+      echo $var
+
+  - name: "Positional parameter count not mistaken for comment (backticks)"
+    stdin: |
+      echo `echo $#`
+
+  - name: "Command substitution with only input redir"
+    stdin: |
+      echo "Some text" >file.txt
+      x=$(<file.txt)
+      echo "x: $x"
+
+  - name: "Command substitution with only input redir in pipeline"
+    known_failure: true
+    ignore_stderr: true
+    test_files:
+      - path: file.txt
+        contents: |
+          File Contents
+    stdin: |
+      x=$(<non-existent-file.txt) || x=$(<file.txt)
+      echo "\$?: $?"
+      echo "x: $x"
+
+  - name: "Backquote with only input redir"
+    stdin: |
+      echo "Some text" >file.txt
+      x=`<file.txt`
+      echo "x: $x"
+
+  - name: "Command substitution as simple command preserves exit code"
+    stdin: |
+      $(false)
+      echo "exit code: $?"
+
+      $(true)
+      echo "exit code: $?"
+
+      $(exit 42)
+      echo "exit code: $?"
+
+  - name: "Backtick substitution as simple command preserves exit code"
+    stdin: |
+      `false`
+      echo "exit code: $?"
+
+      `true`
+      echo "exit code: $?"
+
+  - name: "Command substitution with exec as simple command"
+    stdin: |
+      $(exec true)
+      echo "exit code: $?"
+
+      $(exec false)
+      echo "exit code: $?"
+
+  - name: "Command substitution strips null bytes"
+    ignore_stderr: true
+    stdin: |
+      echo "$(echo -e 'a\x00b')" | hexdump -C
+
+  - name: "Backtick substitution strips null bytes"
+    ignore_stderr: true
+    stdin: |
+      echo "`echo -e 'a\x00b'`" | hexdump -C
+
+  - name: "Command substitution strips multiple null bytes"
+    ignore_stderr: true
+    stdin: |
+      echo "$(echo -e 'hello\x00world\x00end')" | hexdump -C
+
+  - name: "Command substitution with only null bytes produces empty string"
+    ignore_stderr: true
+    stdin: |
+      echo "$(echo -e '\x00\x00\x00')" | hexdump -C
+
+  - name: "Variable assignment from command substitution strips null bytes"
+    ignore_stderr: true
+    stdin: |
+      x=$(echo -e 'a\x00b')
+      echo "$x" | hexdump -C
+
+  - name: "Input redirection substitution strips null bytes"
+    ignore_stderr: true
+    stdin: |
+      printf 'a\x00b' > file.txt
+      x=$(<file.txt)
+      echo "$x" | hexdump -C
+
+  - name: "Nested command substitution strips null bytes"
+    ignore_stderr: true
+    stdin: |
+      echo "$(echo "$(echo -e 'a\x00b')")" | hexdump -C
+
+  - name: "Nested command substitution exit code"
+    stdin: |
+      $($(false))
+      echo "exit code: $?"
+
+      $($(:))
+      echo "exit code: $?"
+
+  - name: "Syntax error inside command substitution"
+    known_failure: true # TODO(parser): the substituted command isn't parsed until it runs, so bash's syntax error (which ends the script) becomes a failed substitution
+    ignore_stderr: true
+    stdin: |
+      x="[$(if)]"
+      echo "rc=$? x=$x"
+
+  - name: "Case statement with unparenthesized pattern in command substitution"
+    stdin: |
+      echo "$(case x in x) echo matched;; esac)"
+
+  - name: "Case statement with unparenthesized pattern in command substitution in here doc"
+    stdin: |
+      cat <<EOF
+      $(case x in x) echo matched;; esac)
+      EOF
+
+  - name: "Command substitution with embedded extglob"
+    stdin: |
+      shopt -s extglob
+      touch abc abd xyz
+      echo "$(echo @(abc|xyz))"
+      echo $(echo !(ab*))
+
+  - name: "Command substitution with quoted paren in extglob"
+    stdin: |
+      shopt -s extglob
+      echo @(")") @(a|')'|b)x @(\))
+      echo $(printf "%s" @(")"))
+      echo "$(echo @(a|")"|b)x)"
+      echo @($'\'')x @($'a\')'|b) @(\$'a\')x @($")")x
+      echo $(echo @($'\'')x)
+      echo @($$'a\')x @($$$'\'')x | sed "s/$$/PID/g"
+
+  - name: "Extglob containing backquotes or command substitution in quotes"
+    stdin: |
+      shopt -s extglob
+      echo @(`echo ")"`)x @(`echo "("`)x
+      echo @("$(echo ")")")x @("`echo "\)"`")x
+      echo $(echo @(`echo ")"`)x)
+
+  - name: "Extglob containing parameter expansion with blanks in quotes"
+    stdin: |
+      shopt -s extglob
+      case 'a  b' in @("${u:-a  b}")) echo match;; *) echo no match;; esac
+
+  - name: "Extglob containing dollar and single quote in double quotes"
+    stdin: |
+      shopt -s extglob
+      v="\$'x'"
+      case "$v" in @("$'x'")) echo match;; *) echo no match;; esac
+
+  - name: "Escaped backslash in backquoted command"
+    stdin: |
+      shopt -s extglob
+      echo `echo \\"`
+      echo @(`echo \\"`)x
+
+  - name: "Extglob containing backquoted command that fails"
+    ignore_stderr: true
+    stdin: |
+      shopt -s extglob
+      echo @(}`'`)x
+      echo @(`$'\'`)x
+
+  - name: "Extglob with unquoted command substitution containing a comment"
+    # As in bash, an unquoted `$(` in an extglob isn't parsed as a command; its parens
+    # just count toward the nesting, so the `)` in the comment matters.
+    ignore_stderr: true
+    stdin: |
+      shopt -s extglob
+      echo @($(echo x # )
+      ))y
+      echo "not reached"
+
+  - name: "Extglob with unterminated construct inside quotes"
+    ignore_stderr: true
+    stdin: |
+      shopt -s extglob
+      echo @("$(\$"\))x
+      echo "not reached"
+
+  - name: "Single quote after escaped or doubled dollar sign"
+    stdin: |
+      echo \$'a\'x
+      echo $$'a\'x | sed "s/$$/PID/g"
+
+  - name: "Extglob containing backquoted command with close paren"
+    stdin: |
+      shopt -s extglob
+      touch x
+      echo $(echo @(`case x in x) echo x;; esac`))
+
+  - name: "Pathname expansion of extglob containing backquoted command"
+    known_failure: true # TODO(patterns): extglobs containing an expansion never match
+    stdin: |
+      shopt -s extglob
+      touch x
+      echo @(`case x in x) echo x;; esac`)
+
+  - name: "Function substitution"
+    known_failure: true # TODO(expansion): #931: ${ cmd; } (bash 5.3) is not implemented
+    stdin: |
+      ${ false; }
+      echo "rc=$?"
+      x=${ echo hi; }
+      echo "x=$x"

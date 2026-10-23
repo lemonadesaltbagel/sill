@@ -1,0 +1,645 @@
+name: "Builtins: history"
+cases:
+  - name: "basic history saving"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      echo something
+      echo else
+
+  - name: "existing history file"
+    pty: true
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+    ignore_stdout: true # Prompts and other don't quite line up
+    stdin: |
+      #expect-prompt
+      history >history-output.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "existing history file with timestamps"
+    pty: true
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          #1750000000
+          a b c
+          #1750000001
+          1 2 3
+    ignore_stdout: true # Prompts and other don't quite line up
+    stdin: |
+      #expect-prompt
+      history >history-output.txt
+      #send:Enter
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "existing history file with timestamps and HISTTIMEFORMAT"
+    pty: true
+    env:
+      HISTFILE: "history-file.txt"
+      HISTTIMEFORMAT: "%C "
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          #1750000000
+          a b c
+          #1750000001
+          1 2 3
+    ignore_stdout: true # Prompts and other don't quite line up
+    stdin: |
+      #expect-prompt
+      #send:Ctrl+D
+
+  - name: "history N"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      : cmd2
+      history 2
+
+  - name: "history with duplicates"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      : cmd1
+      : cmd1
+      : cmd2
+      : cmd1
+      history
+
+  - name: "history -c"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      history -c
+      history
+
+  - name: "history -d"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      history -d 1
+      history
+
+  - name: "history -d: negative offset"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      : cmd2
+      history -d -2
+      history
+
+  - name: "history -a"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      echo "[histfile]"
+      cat $HISTFILE
+
+      history -a
+
+      echo "[histfile after -a]"
+      cat $HISTFILE
+
+      history -a
+
+      echo "[histfile after second -a]"
+      cat $HISTFILE
+
+  - name: "history -w"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      echo "[histfile]"
+      cat $HISTFILE
+
+      history -w
+
+      echo "[histfile after -w]"
+      cat $HISTFILE
+
+      history -w
+
+      echo "[histfile after second -w]"
+      cat $HISTFILE
+
+  - name: "history -w with explicit file"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      history -w some-file.txt
+
+  - name: "history -s"
+    known_failure: true # NOTE: bash excludes the history command itself from history
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      history -s a b c
+      history
+
+  - name: "HISTCMD"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : cmd1
+      echo $HISTCMD
+      : cmd2
+      echo $HISTCMD
+      : cmd3
+      echo $HISTCMD
+
+  - name: "HISTTIMEFORMAT"
+    known_failure: true # TODO(history): needs triage
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTTIMEFORMAT: "century=%C "
+    stdin: |
+      : cmd1
+      : cmd2
+      history
+
+  - name: "history file with unreadable lines"
+    ignore_stderr: true # Ignore brush's warnings about unreadable lines
+    stdin: |
+      bash -c 'printf "\xff\xfe\xfd" >history-file.txt'
+      HISTFILE=history-file.txt $0 -o history -c 'echo hi'
+
+  # NOTE: These cases run interactively with the harness's --norc removed so that ~/.bashrc is
+  # honored. The system rc file also runs on some distros and may set HISTTIMEFORMAT, so each
+  # .bashrc unsets it.
+  - name: "HISTFILE loaded from environment"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+    stdin: |
+      history
+
+  - name: "HISTFILE changed by .bashrc"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: "other-history-file.txt"
+        contents: |
+          x y z
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+          HISTFILE=other-history-file.txt
+    stdin: |
+      history
+
+  - name: "HISTFILE emptied by .bashrc"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+          HISTFILE=
+    stdin: |
+      history
+
+  - name: "empty HISTFILE in environment"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: ""
+    test_files:
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+    stdin: |
+      history
+
+  - name: "history -w with empty HISTFILE"
+    min_oracle_version: "5.3" # bash 5.2 fails with status 1; 5.3 warns but succeeds
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: ""
+    stdin: |
+      history -w; echo "status: $?"
+
+  - name: "history -s in .bashrc suppresses loading HISTFILE"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+          history -s marker
+    stdin: |
+      history
+
+  - name: "history -s then -c in .bashrc still loads HISTFILE"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+          history -s marker
+          history -c
+    stdin: |
+      history
+
+  - name: "history -s then -d in .bashrc still loads HISTFILE"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+          history -s marker
+          history -d 1
+    stdin: |
+      history
+
+  - name: "loaded history entries without timestamps are stamped with load time"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTTIMEFORMAT: "[stamped] "
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          a b c
+          1 2 3
+    stdin: |
+      history
+      # Unset HISTFILE before exit so no wall-clock timestamp gets written to the file.
+      unset HISTFILE
+
+  # Numbering: an entry's number is its position, so removing one renumbers those after
+  # it, and new entries are numbered after what's left.
+  - name: "history -d from the middle renumbers later entries"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      : c
+      history -d 2
+      : d
+      history
+
+  - name: "history -d of the last entry"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      history -d -1
+      history
+
+  - name: "history -d repeatedly"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      : c
+      : d
+      history -d 1
+      history -d 1
+      history -d 2
+      history
+
+  - name: "history -d range"
+    known_failure: true # brush's history -d takes only a single offset
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      : c
+      : d
+      history -d 2-3
+      history
+
+  - name: "history numbering after history -c"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      history -c
+      : c
+      : d
+      history
+
+  - name: "HISTCMD after history -d"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      : c
+      history -d 1
+      echo $HISTCMD
+      : d
+      echo $HISTCMD
+
+  - name: "history -a after history -d"
+    # Deletes an entry not yet appended. (See the next case for one already appended.)
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      history -a
+      : b
+      : c
+      history -d -2
+      history -a
+      echo "[histfile]"
+      cat $HISTFILE
+
+  - name: "history -a after history -d of an entry already appended"
+    # bash counts the entries to append rather than tracking which aren't saved, so
+    # deleting one already appended shifts what its next -a appends: it skips the
+    # history -d, which was never saved. brush appends it. (Arguably a bash quirk.)
+    known_failure: true
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      history -a
+      history -d 1
+      : c
+      history -a
+      echo "[histfile]"
+      cat $HISTFILE
+
+  - name: "history -w after history -d"
+    args: ["-o", "history"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      : b
+      : c
+      history -d 2
+      history -w
+      echo "[histfile]"
+      cat $HISTFILE
+
+  - name: "history -d in history loaded from HISTFILE"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    removed_default_args: ["--norc"]
+    args: ["-i"]
+    home_dir: "."
+    env:
+      HISTFILE: "history-file.txt"
+    test_files:
+      - path: "history-file.txt"
+        contents: |
+          one
+          two
+          three
+      - path: ".bashrc"
+        contents: |
+          unset HISTTIMEFORMAT
+    stdin: |
+      history -d 2
+      : four
+      history
+      # Unset HISTFILE before exit so the shell doesn't write it back.
+      unset HISTFILE
+
+  # HISTCONTROL applies only to interactive shells.
+  - name: "HISTCONTROL=ignoredups"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "ignoredups"
+    stdin: |
+      : a
+      : b
+      : b
+      : a
+      history
+
+  - name: "HISTCONTROL=ignorespace"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "ignorespace"
+    stdin: |
+      : shown
+       : hidden
+      : shown
+      history
+
+  - name: "HISTCONTROL=ignoreboth"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "ignoreboth"
+    stdin: |
+      : a
+       : hidden
+      : a
+      : b
+      history
+
+  - name: "HISTCONTROL=erasedups"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "erasedups"
+    stdin: |
+      : a
+      : b
+      : a
+      : c
+      : a
+      history
+
+  - name: "HISTCONTROL with unknown values in its list"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "bogus:ignoredups"
+    stdin: |
+      : a
+      : a
+      history
+
+  # N.B. Quoted so the trailing whitespace these depend on survives editors and hooks.
+  - name: "History keeps a command's surrounding whitespace"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: ": first\n  : indented\n: trailing  \nhistory\n"
+
+  - name: "HISTCONTROL=ignoredups tells apart lines differing in whitespace"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "ignoredups"
+    stdin: ": same\n: same \n : same\nhistory\n"
+
+  - name: "HISTCONTROL=erasedups tells apart lines differing in whitespace"
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTCONTROL: "erasedups"
+    stdin: ": same\n: same \n : same\n: other\n: same\nhistory\n"
+
+  - name: "set +o history stops recording"
+    known_failure: true # brush keeps recording after `set +o history`
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      : a
+      set +o history
+      : hidden
+      set -o history
+      : b
+      history
+
+  - name: "HISTIGNORE"
+    known_failure: true # brush doesn't implement HISTIGNORE
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+      HISTIGNORE: "ls*:&:echo skip"
+    stdin: |
+      : a
+      ls >/dev/null
+      : a
+      echo skip
+      : b
+      history
+
+  - name: "cmdhist saves a multi-line command as one line"
+    known_failure: true # brush saves the command's newlines as typed
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      for x in 1; do
+        : inside
+      done
+      history
+
+  - name: "History expansion"
+    known_failure: true # brush doesn't implement history expansion
+    ignore_stderr: true # Ignore job control warnings from interactive shell without a tty
+    args: ["-i"]
+    env:
+      HISTFILE: "history-file.txt"
+    stdin: |
+      echo one
+      !!
+      history
+
+  - name: "history rejects an unknown option with status 2"
+    known_failure: true # TODO(history): `-z` is taken as an operand, and the missing history is reported instead, with status 1
+    ignore_stderr: true
+    stdin: |
+      history -z
+      echo "history -z: $?"

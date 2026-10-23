@@ -1,0 +1,257 @@
+name: "set -x"
+cases:
+  - name: "basic"
+    stdin: |
+      set -x
+
+      ls
+
+      for f in 1 2 3; do echo ${f}; done
+
+      case 1 in
+        1) echo "1";;
+        *) echo "not";;
+      esac
+
+      while false; do
+        echo body
+      done
+
+      newvar=$(echo "new")
+
+      x=$((3 + 7))
+
+      if [[ x == 10 && ! 0 ]]; then
+        echo "Math checks"
+      fi
+
+      var="x"
+      [[ ${var} && ${var//[[:space:]]/} ]]
+
+      for ((i = 0; i < 3; i++)); do
+        echo $i
+      done
+
+      ((x = 3)) || ((x = 4))
+
+      override=value echo some_output
+
+  - name: "sourced script"
+    test_files:
+      - path: script.sh
+        contents: |
+          echo "Entered script"
+          for f in a b c; do echo $f; done
+          echo "Exiting script"
+    stdin: |
+      set -x
+
+      echo "About to source script"
+      source script.sh
+      echo "Back from script"
+
+  - name: "functions"
+    stdin: |
+      set -x
+
+      myfunc() {
+        echo "In myfunc"
+        for i in 1 2; do echo "i is $i"; done
+      }
+
+      echo "Before function call"
+      myfunc
+      echo "After function call"
+
+  - name: "declaration assignments show expanded values"
+    known_failure: true # TODO: xtrace improvements required
+    stdin: |
+      value=world
+      set -x
+      declare declared=$value
+      export exported=$value
+      readonly fixed=$value
+      function f() {
+        local local_value=$value
+      }
+      f
+      set +x
+
+  - name: "wrapper assignment arguments show expanded values"
+    stdin: |
+      value=world
+      set -x
+      builtin echo builtin=$value
+      command echo command=$value
+      set +x
+
+  - name: "command line"
+    args: ["-x", "script.sh"]
+    test_files:
+      - path: script.sh
+        contents: |
+          echo "In command line script"
+          for n in x y z; do echo $n; done
+
+  - name: "trap"
+    known_failure: true # TODO(traps): review this
+    stdin: |
+      set -x
+
+      trap 'echo "In trap"' DEBUG
+
+      echo "Doing something"
+
+  #
+  # Regression coverage: command tracing covers every form of the declaration builtins and their
+  # wrappers, not only the forms that assign.
+  #
+  - name: "declaration builtins trace their display and query forms"
+    stdin: |
+      f() { :; }
+      set -x
+      declare -p PWD >/dev/null
+      declare >/dev/null
+      export >/dev/null
+      readonly >/dev/null
+      readonly -p >/dev/null
+      declare -f f >/dev/null
+      set +x
+
+  - name: "command and builtin trace their query forms"
+    stdin: |
+      set -x
+      command -v echo >/dev/null
+      command -V echo >/dev/null
+      builtin >/dev/null
+      command >/dev/null
+      set +x
+
+  - name: "command traces its own options"
+    stdin: |
+      set -x
+      command -p echo hi >/dev/null
+      set +x
+
+  - name: "wrappers trace the full invocation for declaration targets"
+    known_failure: true # TODO: xtrace improvements required
+    stdin: |
+      value=world
+      set -x
+      command declare a=$value
+      builtin declare b=$value
+      command builtin declare c=$value
+      builtin command declare d=$value
+      command export e=$value
+      set +x
+
+  - name: "export and readonly echo assignments but not bare names"
+    known_failure: true # TODO: xtrace improvements required
+    stdin: |
+      set -x
+      export a=1 b=2
+      readonly c=3 d
+      declare e=4
+      typeset t=5
+      f() { local g=6 h; }
+      f
+      set +x
+
+  - name: "export and readonly echo assignments recognized from strings"
+    known_failure: true # TODO: xtrace improvements required
+    stdin: |
+      set -x
+      readonly 'q=1'
+      command export 'w=2'
+      set +x
+
+  - name: "assignment operands are traced as single quoted words"
+    known_failure: true # TODO: xtrace improvements required
+    stdin: |
+      v="a b"
+      set -x
+      declare sp="$v"
+      export esp="$v"
+      readonly rsp="$v"
+      set +x
+
+  - name: "invalid export target is not echoed as an assignment"
+    ignore_stderr: true
+    stdin: |
+      set -x
+      export 'ea[0]=1'
+      set +x
+
+  - name: "options following an operand keep their position in the trace"
+    ignore_stderr: true
+    stdin: |
+      set -x
+      declare a=1 -i
+      set +x
+
+  - name: "compound assignment operands are traced as two lines"
+    # A shell traces a compound assignment operand as a standalone assignment line followed by the
+    # declaration command carrying only the variable name; brush emits a single combined line.
+    known_failure: true
+    stdin: |
+      set -x
+      declare -a b=(1 2)
+      declare -A c=([k]=v)
+      export ea=(1 2)
+      readonly ra=(1 2)
+      set +x
+
+  - name: "DEBUG trap fires for a bare assignment statement"
+    # brush only fires the DEBUG trap for commands that reach command execution, so a standalone
+    # assignment statement is skipped.
+    known_failure: true
+    stdin: |
+      trap 'echo "<$BASH_COMMAND>"' DEBUG
+      x=1
+      echo done
+      trap - DEBUG
+
+  - name: "Words starting with # or ~ are quoted in traces"
+    stdin: |
+      set -x
+      : "~" "#a" "b#" "x~"
+
+  - name: "[[ ]] traces show unary operands starting with # or ~ like bash"
+    stdin: |
+      x="~" y="#a" z="a=~"
+      set -x
+      [[ -n $x ]]
+      [[ -n $y ]]
+      [[ -n $z ]]
+
+  - name: "[[ ]] traces show patterns starting with # or ~ like bash"
+    min_oracle_version: 5.3 # bash 5.2 escapes every char of a traced pattern
+    stdin: |
+      x="~" y="#a" w="~/x"
+      set -x
+      [[ a == "$x" ]]
+      [[ a == "$w" ]]
+      [[ a != "$y" ]]
+
+  - name: "Traces leave commas unquoted, like bash"
+    stdin: |
+      set -x
+      : a,b "{a,b}" ,
+
+  - name: "Traces of assignments leave commas unquoted, like bash"
+    stdin: |
+      set -x
+      t=a,b
+      t+=c,d
+      arr=(a,b '{c,d}')
+
+  - name: "[[ ]] traces leave commas in unary operands unquoted, like bash"
+    stdin: |
+      set -x
+      [[ -n a,b ]]
+
+  - name: "[[ ]] traces leave commas in patterns unquoted, like bash"
+    min_oracle_version: 5.3 # bash 5.2 escapes every char of a traced pattern
+    stdin: |
+      set -x
+      [[ x == a,b ]]

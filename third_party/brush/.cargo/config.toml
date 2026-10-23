@@ -1,0 +1,10 @@
+[alias]
+xtask = "run --package xtask --"
+
+[target.wasm32-unknown-unknown]
+# Select a getrandom backend that will work for this target
+rustflags = ["--cfg", 'getrandom_backend="wasm_js"']
+
+[target.wasm32-wasip3]
+# Uninteresting flag to ensure this overrides the flags in [build]
+rustflags = ["--cfg", "x"]

@@ -1,0 +1,385 @@
+name: "Filename expansion"
+cases:
+  - name: "Single file expansion"
+    stdin: "echo file1.txt"
+
+  - name: "Expansion with noglob"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: |
+      set -f
+      echo "*.txt:" *.txt
+
+  - name: "Multiple file expansion"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: |
+      echo *.txt
+      echo *."txt"
+
+  - name: "File expansion with nocaseglob"
+    test_files:
+      - path: "FILE1.TXT"
+      - path: "file2.txt"
+    stdin: |
+      shopt -s nocaseglob
+      echo "*.txt:" *.txt
+      echo "*.TXT:" *.txt
+
+  - name: "Nested directory expansion"
+    test_files:
+      - path: "dir/file1.txt"
+    stdin: "echo dir/*"
+
+  - name: "Multiple level directory expansion"
+    test_files:
+      - path: "dir/subdir/file1.txt"
+    stdin: "echo dir/subdir/*.txt"
+
+  - name: "Expansion with no matches"
+    test_files:
+      - path: "file1.txt"
+    stdin: "echo *.jpg"
+
+  - name: "Expansion with no matches + nullglob"
+    test_files:
+      - path: "file1.txt"
+    stdin: |
+      shopt -s nullglob
+      echo "*.jpg:" *.jpg
+
+  - name: "Expansion with matches and non-matches in directory"
+    test_files:
+      - path: "dir/file.txt"
+      - path: "dir/file.jpg"
+    stdin: "echo dir/*.jpg"
+
+  - name: "Expansion with matches and non-matches in directory + nullglob"
+    test_files:
+      - path: "dir/file.txt"
+      - path: "dir/file.jpg"
+    stdin: |
+      shopt -s nullglob
+      echo "dir/*.jpg:" dir/*.jpg
+
+  - name: "Expansion with special characters"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: "echo file?.txt"
+
+  - name: "Expansion with brackets"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: "echo file[12].txt"
+
+  - name: "Expansion with range"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: "echo file[1-2].txt"
+
+  - name: "Expansion with negation"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: "echo file[!2].txt"
+
+  - name: "Expansion with tilde"
+    env:
+      HOME: /some/dir
+    stdin: |
+      echo ~/file1.txt
+      echo ~/file1.txt:~/file1.txt
+
+  - name: "Expansion with dots"
+    stdin: |
+      echo ./file1.txt
+      echo ../file1.txt
+
+  - name: "Expansion with mixed patterns"
+    test_files:
+      - path: "dir/subdir/file1.txt"
+    stdin: "echo dir/*/file?.txt"
+
+  - name: "Expansion with escaped characters"
+    test_files:
+      - path: "file*.txt"
+    stdin: "echo file\\*.txt"
+
+  - name: "Pathname expansion: extglob disabled"
+    ignore_stderr: true
+    test_files:
+      - path: "ab.txt"
+      - path: "abc.txt"
+      - path: "abd.txt"
+      - path: "def.txt"
+      - path: "abadac.txt"
+      - path: "fabadac.txt"
+      - path: "f.txt"
+      - path: "script.sh"
+        contents: |
+          echo !(a*)
+          echo "result: $?"
+
+          echo @(abc|abd).txt
+          echo "result: $?"
+
+          echo ab?(c).txt
+          echo "result: $?"
+
+          echo *(ab|ad|ac).txt
+          echo "result: $?"
+
+          echo f+(ab|ad|ac).txt
+          echo "result: $?"
+    stdin: |
+      shopt -u extglob
+      chmod +x ./script.sh
+      ./script.sh
+
+  - name: "Pathname expansion: Inverted patterns"
+    ignore_stderr: true
+    test_files:
+      - path: "abc.txt"
+      - path: "abd.txt"
+      - path: "def.txt"
+    stdin: |
+      shopt -s extglob
+      echo "1: " !(a*)
+      echo "2: " !(abc.txt)
+      echo "3: " !(abc)
+      echo "4: " !(*)
+
+  - name: "Pathname expansion: Degenerate inverted pattern"
+    test_files:
+      - path: "abc.txt"
+      - path: "abd.txt"
+      - path: "def.txt"
+    stdin: |
+      shopt -s extglob
+      echo !()
+
+  - name: "Pathname expansion: Extended patterns"
+    ignore_stderr: true
+    test_files:
+      - path: "abc.txt"
+      - path: "abd.txt"
+    stdin: |
+      shopt -s extglob
+      echo "1: " @(abc|abd).txt
+      echo "2: " @(abc.txt)
+      echo "3: " @(abc)
+      echo "4: " @(|abc.txt)
+
+  - name: "Pathname expansion: Optional patterns"
+    ignore_stderr: true
+    test_files:
+      - path: "ab.txt"
+      - path: "abc.txt"
+    stdin: |
+      shopt -s extglob
+      echo ab?(c).txt
+
+  - name: "Pathname expansion: Star patterns"
+    ignore_stderr: true
+    test_files:
+      - path: "abadac.txt"
+      - path: "ab.txt"
+    stdin: |
+      shopt -s extglob
+      echo *(ab|ad|ac).txt
+
+  - name: "Pathname expansion: Plus patterns"
+    ignore_stderr: true
+    test_files:
+      - path: "fabadac.txt"
+      - path: "f.txt"
+    stdin: |
+      shopt -s extglob
+      echo f+(ab|ad|ac).txt
+
+  - name: "Pathname expansion: quoting"
+    test_files:
+      - path: test.txt
+      - path: subdir/test.txt
+    stdin: |
+      echo "./test"*.txt
+      echo "subdir"/*.txt
+      echo "test.*"
+
+  - name: "Pathname expansion: dot files (no dotglob)"
+    min_oracle_version: 5.2
+    stdin: |
+      touch .file
+      touch .dir
+
+      shopt -u dotglob
+      echo "*   : " *
+      echo "*i* : " *i*
+      echo "./* : " ./*
+      echo ".*  : " .*
+      echo "./.*: " ./.*
+
+  - name: "Glob results are sorted"
+    test_files:
+      - path: "cherry.txt"
+      - path: "apple.txt"
+      - path: "banana.txt"
+    stdin: |
+      echo *.txt
+
+  - name: "Multiple globs on one command line"
+    test_files:
+      - path: "a.txt"
+      - path: "b.txt"
+      - path: "x.log"
+      - path: "y.log"
+    stdin: |
+      echo *.txt *.log
+
+  - name: "Glob does not expand in variable assignment"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: |
+      x=*.txt
+      echo "$x"
+
+  - name: "Glob expands in unquoted variable use"
+    test_files:
+      - path: "file1.txt"
+      - path: "file2.txt"
+    stdin: |
+      x=*.txt
+      echo $x
+
+  - name: "Glob with trailing slash matches directories"
+    test_files:
+      - path: "mydir/file.txt"
+      - path: "myfile.txt"
+    stdin: |
+      echo */
+
+  - name: "Trailing path filters glob results"
+    test_files:
+      - path: "README.md"
+      - path: "photos/photo.png"
+      - path: "a/apple.txt"
+      - path: "b/banana.txt"
+    stdin: |
+      echo */banana.txt
+      echo */*.txt
+
+  - name: "Trailing literal keeps dangling symlinks but drops missing"
+    test_files:
+      - path: "a/real.txt"
+      - path: "b/real.txt"
+      - path: "c/other.txt"
+    stdin: |
+      # a/link.txt is a *dangling* symlink: bash's glob matches it (directory-entry
+      # existence, via lstat), so brush must too. b and c have no link.txt and must
+      # be dropped.
+      ln -s nonexistent-target a/link.txt
+      echo "link.txt:" */link.txt
+      echo "real.txt:" */real.txt
+
+  - name: "Trailing literal with directory symlinks"
+    test_files:
+      - path: "realdir/file.txt"
+    stdin: |
+      # A symlink to a directory should be traversed like a real directory.
+      ln -s realdir linkdir
+      ln -s nonexistent danglingdir
+      echo "*/file.txt:" */file.txt
+
+  - name: "Globstar disabled by default"
+    test_files:
+      - path: "a/b/c.txt"
+    stdin: |
+      shopt -u globstar
+      echo **/c.txt
+
+  - name: "Globstar recursive matching"
+    known_failure: true
+    test_files:
+      - path: "a/b/c.txt"
+      - path: "a/d.txt"
+      - path: "e.txt"
+    stdin: |
+      shopt -s globstar
+      echo **/*.txt
+
+  - name: "GLOBIGNORE filters glob results"
+    known_failure: true
+    test_files:
+      - path: "a.txt"
+      - path: "b.txt"
+      - path: "c.txt"
+    stdin: |
+      GLOBIGNORE="b.txt"
+      echo *.txt
+
+  - name: "GLOBIGNORE with multiple patterns"
+    known_failure: true
+    test_files:
+      - path: "a.txt"
+      - path: "b.txt"
+      - path: "c.txt"
+      - path: "d.log"
+    stdin: |
+      GLOBIGNORE="b.txt:c.txt"
+      echo *.txt
+      echo *.log
+
+  - name: "GLOBIGNORE implicitly enables dotglob"
+    known_failure: true
+    min_oracle_version: 5.2
+    test_files:
+      - path: "a.txt"
+      - path: ".hidden.txt"
+    stdin: |
+      GLOBIGNORE="a.txt"
+      echo *.txt
+
+  - name: "Unsetting GLOBIGNORE restores behavior"
+    known_failure: true
+    test_files:
+      - path: "a.txt"
+      - path: "b.txt"
+    stdin: |
+      GLOBIGNORE="a.txt"
+      echo *.txt
+      unset GLOBIGNORE
+      echo *.txt
+
+  - name: "Star does not match slash in path"
+    test_files:
+      - path: "dir/file.txt"
+      - path: "top.txt"
+    stdin: |
+      echo *.txt
+
+  - name: "Pathname expansion: dot files (with dotglob)"
+    min_oracle_version: 5.2
+    stdin: |
+      touch .file
+      touch .dir
+
+      shopt -s dotglob
+      echo "*   : " *
+      echo "*i* : " *i*
+      echo "./* : " ./*
+      echo ".*  : " .*
+      echo "./.*: " ./.*
+
+  - name: "Pathname expansion: extglob containing parameter expansion"
+    known_failure: true # TODO(patterns): extglobs containing an expansion never match
+    stdin: |
+      shopt -s extglob
+      touch x
+      u=x
+      echo @($u) @(a|$u) @(a|${u:-y}) @(a|${v:-x})

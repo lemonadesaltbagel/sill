@@ -1,0 +1,351 @@
+name: "Redirection"
+cases:
+  - name: "Redirection to null"
+    stdin: |
+      echo hi >/dev/null
+
+  - name: "Output redirection to file"
+    stdin: |
+      echo hi >out.txt
+      ls out.txt
+      cat out.txt
+
+  - name: "Output redirection to file (append)"
+    stdin: |
+      echo hi >>out.txt
+      echo there >>out.txt
+      ls out.txt
+      cat out.txt
+
+  - name: "Input redirection from file"
+    test_files:
+      - path: "in.txt"
+        contents: |
+          Something here.
+    stdin: |
+      cat <in.txt
+
+  - name: "Redirection to fd"
+    stdin: |
+      echo hi >&2
+
+  - name: "Redirecting stdout + stderr to file"
+    stdin: |
+      function write_both() {
+        echo "$1"
+        echo "$2" >&2
+      } 
+
+      echo "[Writing]"
+      write_both stdout stderr >& file.txt
+      echo "[Contents of file.txt]"
+      cat file.txt
+
+  - name: "Invalid stdout + stderr redir"
+    ignore_stderr: true
+    stdin: |
+      function write_both() {
+        echo "$1"
+        echo "$2" >&2
+      } 
+
+      echo "[Writing]"
+      write_both stdout stderr 2>& file.txt
+      echo "[Contents of file.txt]"
+      cat file.txt
+
+  - name: "Redirecting an fd"
+    stdin: |
+      echo hi-out 1>stdout.txt
+      echo hi-error 2>stderr.txt >&2
+
+  - name: "Almost redirecting but not actually redirecting"
+    stdin: |
+      # Checks to make sure the '1' isn't treated as a file descriptor
+      echo 1 >&2
+
+  - name: "Redirection with arbitrary fd number"
+    stdin: |
+      echo hi 4>file.txt >&4
+
+  - name: "Process substitution: basic"
+    ignore_stdout: true # Specific fd-based paths may vary across runs
+    stdin: |
+      shopt -u -o posix
+      echo <(:) >(:)
+      echo <(:) <(:)
+      echo >(:) >(:)
+
+  - name: "Process substitution: not in simple commands"
+    known_failure: true # Known to fail because we are only handling them in simple commands now
+    stdin: |
+      shopt -u -o posix
+      for f in <(echo hi); do echo $f; done
+
+  - name: "Process substitution: builtins"
+    stdin: |
+      source <(echo VAR=100)
+      echo "var: ${VAR}"
+
+  - name: "Process substitution: input redirection"
+    stdin: |
+      shopt -u -o posix
+      cat < <(echo hi)
+
+  - name: "Process substitution: output redirection"
+    skip: true # TODO(redirection): Test is flaky; needs work.
+    stdin: |
+      shopt -u -o posix
+      echo hi > >(wc -l)
+      echo hi >> >(wc -l)
+
+  - name: "Process substitution: wait for an output consumer"
+    known_failure: true # TODO(redirection): wait doesn't wait for a process substitution, so the shell exits before the consumer prints anything
+    min_oracle_version: "5.0" # bash 4.4 and earlier don't wait for process substitutions either
+    stdin: |
+      shopt -u -o posix
+      echo hi > >(sleep 0.5; while read -r l; do echo "out:$l"; done)
+      wait
+      echo "after wait"
+
+  - name: "Process substitution: input"
+    stdin: |
+      shopt -u -o posix
+      var="value"
+      cat <(var="updated"; echo ${var})
+      echo "Done."
+      echo "${var}"
+
+  - name: "Input redirection from /dev/null"
+    stdin: |
+      cat < /dev/null
+      echo "exit: $?"
+
+  - name: "Redirect stderr to /dev/null"
+    stdin: |
+      ls /non-existent-path 2>/dev/null
+      echo "exit: $?"
+
+  - name: "Append redirection to /dev/null"
+    stdin: |
+      echo hi >>/dev/null
+      echo "exit: $?"
+
+  - name: "Redirect to /dev/null via variable"
+    stdin: |
+      target=/dev/null
+      echo hi >"$target"
+      echo "exit: $?"
+
+  - name: "Read and write /dev/null"
+    stdin: |
+      cat <>/dev/null
+      echo "exit: $?"
+
+  - name: "Redirect stdout and stderr"
+    stdin: |
+      ls -d . non-existent-dir &>/dev/null
+      ls -d . non-existent-dir &>>/dev/null
+
+  - name: "Process substitution: input + output"
+    stdin: |
+      shopt -u -o posix
+      cp <(echo hi) >(cat)
+
+  - name: "Redirection in command substitution"
+    stdin: |
+      echo $(echo hi >&2) 2>stderr.txt
+
+  - name: "Redirection in command substitution to non-standard fd"
+    ignore_stderr: true
+    stdin: |
+      echo $(echo hi >&3) 3>output.txt
+
+  - name: "Redirection in command substitution in braces to non-standard fd"
+    ignore_stderr: true
+    stdin: |
+      { : $(echo hi >&3); } 3>output.txt
+
+  - name: "Redirection in command substitution in subshell to non-standard fd"
+    ignore_stderr: true
+    stdin: |
+      ( : $(echo hi >&3); ) 3>output.txt
+
+  - name: "Expansions in a command don't see its redirections"
+    known_failure: true # TODO(expansion): redirections are set up as they're reached, so they apply to command substitutions in later words and in all assignments
+    stdin: |
+      f() { echo </dev/null "[$(cat)]"; }
+      echo stdin-data | f
+      g() { x="[$(cat)]" </dev/null; echo "$x"; }
+      echo stdin-data | g
+
+  - name: "Redirection failure"
+    ignore_stderr: true
+    stdin: |
+      echo hi > /non-existent-dir/file.txt; echo following-command
+
+  - name: "Redirection for opening read and write"
+    stdin: |
+      echo hi >file.txt
+      cat <>file.txt
+
+  - name: "Close stdout"
+    ignore_stderr: true
+    stdin: |
+      echo "This should not appear" 1>&-
+      echo "This should appear"
+
+  - name: "Close stderr"
+    stdin: |
+      non-existent-command 2>&-
+      echo "This should appear"
+
+  - name: "Close stdout of external command"
+    ignore_stderr: true
+    stdin: |
+      env echo "This should not appear" 1>&-
+      echo "This should appear"
+
+  - name: "Close standard streams of external commands: exit status"
+    known_failure: true # TODO(redirection): a closed standard stream is opened on the null device, not closed
+    ignore_stderr: true
+    stdin: |
+      env echo "This should not appear" 1>&-
+      echo "echo: $?"
+      cat <&-
+      echo "cat: $?"
+
+  - name: "Redirect for an external command with one file descriptor to spare"
+    known_failure: true # TODO(redirection): the shell duplicates a redirected file to hand it to the process, which fails with no descriptor left (bash doesn't need one)
+    ignore_stderr: true
+    stdin: |
+      ulimit -n 64
+      # Open files until none are left, then free one, so that opening the
+      # redirection's target succeeds, but nothing past that can be opened.
+      fd=10
+      while [[ $fd -lt 64 ]] && eval "exec $fd</dev/null" 2>/dev/null; do fd=$((fd+1)); done
+      eval "exec $((fd-1))<&-"
+      env true 3</dev/null
+      echo "status: $?"
+
+  - name: "Redirect external command output between stdout and stderr"
+    stdin: |
+      env echo "to stderr" >&2
+      env sh -c 'echo "to stdout" >&2' 2>&1
+
+  - name: "Redirect external command output to the shell's stdin"
+    known_failure_platforms: ["windows"] # TODO(redirection): on Windows, the shell's stdin as an external command's output stream is replaced by the shell's stdout
+    ignore_stderr: true
+    stdin: |
+      env echo "to stdin" >&0
+      echo "status: $?"
+
+  - name: "Close output file descriptor"
+    ignore_stderr: true
+    stdin: |
+      # Open a new output fd (3).
+      exec 3>test.txt
+      # Write to the file.
+      echo "test" >&3
+      # Close the file.
+      exec 3>&-
+      # Make sure we can't write to it.
+      echo "after close" >&3 || echo "Cannot write to closed fd"
+
+  - name: "Close input file descriptor"
+    ignore_stderr: true
+    test_files:
+      - path: "input.txt"
+        contents: |
+          line1
+          line2
+    stdin: |
+      # Open an input file descriptor (3).
+      exec 3<input.txt
+      # Read from the file.
+      read line <&3
+      echo "Read: $line"
+      # Close the file descriptor.
+      exec 3<&-
+      # Make sure we can't read from it.
+      read line <&3 2>/dev/null || echo "Cannot read from closed fd"
+
+  - name: "Duplicate input file descriptor"
+    test_files:
+      - path: "input.txt"
+        contents: |
+          test input line
+    stdin: |
+      # Open an input file descriptor (3).
+      exec 3<input.txt
+      # Duplicate it to another descriptor (4).
+      exec 4<&3
+      # Read from the new descriptor.
+      read line <&4
+      echo "Read: $line"
+
+  - name: "Input file descriptor duplication from stdin"
+    skip: true # Needs revisiting; doesn't behave as seems to have been expected.
+    stdin: |
+      exec 3<&0
+      echo "test" | { read line <&3; echo "Read: $line"; }
+
+  - name: "Multiple file descriptor redirections"
+    ignore_stderr: true
+    stdin: |
+      # Open multiple new output fds
+      exec 3>fd3.txt 4>fd4.txt 5>fd5.txt
+      # Write to the new fds
+      echo "fd3" >&3
+      echo "fd4" >&4
+      echo "fd5" >&5
+      # Close the fds
+      exec 3>&- 4>&- 5>&-
+      # Read from the files to verify
+      echo "[3]"
+      cat fd3.txt
+      echo "[4]"
+      fd4.txt
+      echo "[5]"
+      fd5.txt
+
+  - name: "High file descriptor numbers"
+    stdin: |
+      # Open high numbered file descriptor
+      echo "test" 10>fd10.txt >&10
+      # Dump the file
+      echo "[10]"
+      cat fd10.txt
+
+  - name: "Redirection with out-of-range io number falls back to a word"
+    stdin: |
+      # A run of digits too large to fit an io number isn't a valid redirection
+      # prefix, so it's treated as an ordinary word argument instead.
+      echo hi 299999999999999999999999999999999999999999999999999999>out.txt
+      cat out.txt
+
+  - name: "Redirection with out-of-range io number duplicated to a valid fd"
+    stdin: |
+      echo 99999999999999999999>&1
+
+  - name: "Redirection with out-of-range io numbers on both sides of a dup"
+    ignore_stderr: true # Error message wording differs between shells.
+    stdin: |
+      echo hi 299999999999999999999999999999999999999999999999999999>&20000000000000000000000000000000000000000000
+      echo "exit: $?"
+
+  - name: "Inheritance of fds from parent"
+    test_files:
+      - path: "test.sh"
+        contents: |
+          echo hi >&3
+    stdin: |
+      args=""
+
+      # NOTE: For now, brush doesn't inherit arbitrary all open fds by default like bash does.
+      # We need to explicitly specify which fds to inherit.
+      if [[ $BRUSH_VERSION ]]; then
+        args+=" --inherit-fd=3"
+      fi
+
+      $0 $args test.sh 3>output.txt

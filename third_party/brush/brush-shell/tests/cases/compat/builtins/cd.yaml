@@ -1,0 +1,181 @@
+name: "Builtins: cd"
+cases:
+  - name: "Basic cd usage"
+    ignore_stderr: true
+    stdin: |
+      echo "cd /"
+      cd /
+      echo $?
+      echo "pwd: $PWD"
+
+      echo "cd usr"
+      cd usr
+      echo $?
+      echo "pwd: $PWD"
+
+      echo "cd"
+      cd
+      echo $?
+      echo "pwd: $PWD"
+
+  - name: "cd to file"
+    ignore_stderr: true
+    test_files:
+      - path: "file"
+        contents: "file contents"
+    stdin: |
+      ls -1
+      cd file
+      echo $?
+      ls -1
+
+  - name: "cd -"
+    ignore_stderr: true
+    stdin: |
+      cd /
+      echo "pwd: $PWD"
+      cd usr
+      echo "pwd: $PWD"
+      echo "oldpwd: $OLDPWD"
+      cd -
+      echo $?
+      echo "pwd: $PWD"
+
+  - name: "cd ~"
+    stdin: |
+      mkdir ./my_home
+      export HOME="$(realpath ./my_home)"
+      echo "Set HOME: $(basename $HOME)"
+      (
+        echo "Subshell 1: HOME=$(basename $HOME)"
+        cd ~
+        echo "pwd: $(basename $PWD)"
+      )
+      (
+        echo "Subshell 2: HOME=$(basename $HOME)"
+        cd -L ~
+        echo "pwd: $(basename $PWD)"
+      )
+      (
+        echo "Subshell 3: HOME=$(basename $HOME)"
+        cd -P ~
+        echo "pwd: $(basename $PWD)"
+      )
+
+  - name: "cd with symlink"
+    stdin: |
+      mkdir -p ./level1/level2/level3
+      cd level1
+      ln -s ./level2/level3 ./symlink
+
+      # -L by default
+      (
+        cd ./symlink
+        echo "$(basename $PWD)"
+        cd ..
+        echo "$(basename $PWD)"
+      )
+
+  - name: "cd -L"
+    stdin: |
+      mkdir -p ./level1/level2/level3
+      cd level1
+      ln -s ./level2/level3 ./symlink
+
+      echo "[Case 1]"
+      (
+        cd ./symlink
+        echo "$(basename $PWD)"
+        cd -L ..
+        echo "$(basename $PWD)"
+      )
+
+      echo "[Case 2]"
+      (
+        cd -L ./symlink
+        echo "$(basename $PWD)"
+        cd ..
+        echo "$(basename $PWD)"
+      )
+
+      # without pwd
+      echo "[Case 3]"
+      (
+        cd -L ./symlink
+        echo "$(basename $PWD)"
+        export PWD=
+        cd -L ..
+        echo "$(basename $PWD)"
+      )
+
+      echo "[Case 4]"
+      (
+        cd -L ./symlink
+        export PWD=
+        # start a shell without $PWD
+        (
+          cd .
+          echo "$(basename $PWD)"
+        )
+      )
+
+  - name: "cd -P"
+    stdin: |
+      mkdir -p ./level1/level2/level3
+      cd level1
+      ln -s ./level2/level3 ./symlink
+
+      echo "[Case 1]"
+      (
+        cd ./symlink
+        echo "cd ./symlink => $(basename $PWD)"
+        cd -P ..
+        echo "cd -P .. => $(basename $PWD)"
+      )
+
+      echo "[Case 2]"
+      (
+        cd -P ./symlink
+        echo "cd -P ./symlink => $(basename $PWD)"
+        cd ..
+        echo "cd .. => $(basename $PWD)"
+      )
+
+  - name: "OLDPWD"
+    env:
+      OLDPWD: "/nonexistent/path"
+    stdin: |
+      mkdir subdir
+
+      echo "[0]"
+      echo ${OLDPWD+set}
+
+      echo "[1]"
+      echo ${OLDPWD-NOTSET}
+
+      echo "[2]"
+      declare -p OLDPWD 2>&1 | grep -o "declare -[a-z]* OLDPWD"
+
+      echo "[3]"
+      env | grep "^OLDPWD=" || echo "NOT_IN_ENV"
+
+      echo
+      echo "[Unsetting + cd'ing...]"
+      unset OLDPWD
+      cd $PWD/subdir
+
+      echo "[4]"
+      declare -p OLDPWD 2>&1 | grep -o "declare -[a-z]* OLDPWD"
+
+      echo "[5]"
+      env | grep -o "^OLDPWD="
+
+  - name: "cd .. from a deleted directory"
+    known_failure: true # TODO(cd): `cd ..` fails from a working directory that's been deleted
+    stdin: |
+      start=$PWD
+      mkdir gone
+      cd gone
+      rmdir "${start}/gone"
+      cd ..; echo "status: $?"
+      [[ $PWD == "${start}" ]] && echo "back at the start" || echo "somewhere else"

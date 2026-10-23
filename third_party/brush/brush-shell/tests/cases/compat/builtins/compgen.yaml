@@ -1,0 +1,572 @@
+name: "Builtins: compgen"
+cases:
+  - name: "compgen -A alias"
+    stdin: |
+      alias myalias="ls"
+      alias myalias2="echo hi"
+
+      compgen -A alias myalias
+
+  - name: "compgen -A alias is sorted by name"
+    stdin: |
+      alias e=5
+      alias c=3
+      alias a=1
+      alias f=6
+      alias d=4
+      alias b=2
+
+      compgen -A alias
+
+  - name: "compgen -A binding"
+    stdin: |
+      compgen -A binding tab | sort
+
+  - name: "compgen -A builtin"
+    stdin: |
+      compgen -A builtin cd | sort
+
+  - name: "compgen lists builtins sorted by name"
+    stdin: |
+      compgen -b c
+      echo ---
+      compgen -A builtin e
+
+  - name: "compgen lists enabled and disabled builtins sorted by name"
+    stdin: |
+      enable -n echo cd command
+      compgen -A disabled
+      echo ---
+      compgen -A enabled c
+      echo ---
+      compgen -A enabled e
+
+  - name: "compgen -A directory"
+    stdin: |
+      touch somefile
+      mkdir somedir
+      mkdir somedir2
+
+      compgen -A directory some | sort
+
+  - name: "compgen -A file"
+    stdin: |
+      touch somefile
+      mkdir somedir
+      mkdir somedir2
+
+      compgen -A file some | sort
+
+  - name: "compgen -A file with dot files"
+    stdin: |
+      touch .file
+      mkdir .dir
+
+      echo "[without dotglob]"
+      shopt -u dotglob
+      compgen -A file | sort
+
+      echo "[with dotglob]"
+      shopt -s dotglob
+      compgen -A file | sort
+
+  - name: "compgen -A function"
+    stdin: |
+      myfunc() {
+        echo hi
+      }
+
+      myfunc2() {
+        echo hello
+      }
+
+      compgen -A function myfunc
+
+  - name: "compgen -A function is sorted by name"
+    stdin: |
+      e() { :; }
+      c() { :; }
+      a() { :; }
+      f() { :; }
+      d() { :; }
+      b() { :; }
+
+      compgen -A function
+
+  - name: "compgen -A function only returns functions matching the prefix"
+    stdin: |
+      zzfa() { :; }
+      zzfb() { :; }
+      totally_unrelated() { :; }
+
+      compgen -A function zzf
+      echo "[$?]"
+      compgen -A function nomatch
+      echo "[$?]"
+
+  - name: "compgen -A command is sorted by name"
+    stdin: |
+      zzfe() { :; }
+      zzfc() { :; }
+      zzfa() { :; }
+
+      compgen -A command zzf
+
+  - name: "compgen -A command only returns functions matching the prefix"
+    stdin: |
+      zzfa() { :; }
+      zzfb() { :; }
+      totally_unrelated() { :; }
+
+      compgen -A command zzf
+
+  - name: "compgen -A keyword"
+    stdin: |
+      compgen -A keyword esa | sort
+
+  - name: "compgen -A variable"
+    stdin: |
+      declare myvar=10
+      declare myvar2=11
+
+      compgen -A variable myvar | sort
+
+  - name: "compgen -W"
+    stdin: |
+      echo "1. Basic compgen -W"
+      compgen -W "one two three" -- t | sort
+      echo "2. compgen -W with expansion"
+      myvar=value compgen -W '${myvar}'
+
+  - name: "compgen -W splits before expanding each word"
+    stdin: |
+      echo "[brace words after default splitting]"
+      compgen -W '{a,b} c'
+
+      echo "[IFS separator breaks brace syntax]"
+      IFS=,
+      compgen -W 'x{1,2}'
+
+      echo "[empty list fields are removed]"
+      IFS=:
+      compgen -W 'a::b'
+
+  - name: "compgen -W does not pathname-expand"
+    stdin: |
+      touch foo.txt bar.txt baz.log
+
+      echo "[glob pattern should be literal]"
+      compgen -W '*.txt' | sort
+
+      echo "[question mark glob should be literal]"
+      compgen -W '?.log' | sort
+
+  - name: "compgen -W with unsorted values"
+    stdin: |
+      compgen -W 'c b d a'
+
+  - name: "compgen -W with options"
+    stdin: |
+      compgen -W '--abc --def' -- '--ab'
+
+  - name: "compgen with no matches"
+    stdin: |
+      compgen -W yes no && echo "1. Result"
+
+  - name: "compgen -f with tilde"
+    home_dir: testhome # relative to default working dir
+    stdin: |
+      mkdir testhome && cd testhome
+
+      echo "HOME base: $(basename $HOME)"
+      echo "~ base:" $(basename ~)
+
+      touch item1
+
+      echo "[0]"
+      for p in $(compgen -f ~); do
+        echo ${p//$HOME/HOME}
+      done
+
+      echo "[1]"
+      for p in $(compgen -f ~/); do
+        echo ${p//$HOME/HOME}
+      done
+
+  - name: "compgen -f with quoted tilde"
+    known_failure: true
+    stdin: |
+      touch item1
+      HOME=$(pwd)
+
+      echo "[0]"
+      for p in $(compgen -f '~/'); do
+        echo ${p//$HOME/HOME}
+      done
+
+  - name: "compgen -f with quoted var"
+    known_failure: true
+    stdin: |
+      touch item1
+      HOME=$(pwd)
+
+      echo "[0]"
+      for p in $(compgen -f '$HOME/'); do
+        echo ${p//$HOME/HOME}
+      done
+
+  - name: "compgen -f with quoted + escaped var"
+    known_failure: true
+    stdin: |
+      touch item1
+      HOME=$(pwd)
+
+      echo "[0]"
+      for p in $(compgen -f '\$HOME/'); do
+        echo ${p//$HOME/HOME}
+      done
+
+  - name: "compgen with interesting hyphens"
+    stdin: |
+      compgen -P-before -S-after -W "one two three" -- t | sort
+
+  - name: "compgen -X"
+    stdin: |
+      echo "[Take 1]"
+      compgen -W 'foo bar' -X 'foo' ''
+
+      echo "[Take 2]"
+      compgen -W 'foo bar' -X 'f*' ''
+
+      echo "[Take 3]"
+      compgen -W '&1 foo' -X '\&*' ''
+
+  - name: "compgen -X with a leading ! keeps only matches"
+    stdin: |
+      compgen -W 'foo bar fab' -X '!f*' ''
+      echo "rc=$?"
+      compgen -W 'foo bar' -X '!z*' ''
+      echo "rc=$?"
+
+  - name: "compgen -X with replacement"
+    stdin: |
+      echo "[Take 1]"
+      compgen -W 'somebody something' -X '&b*' some
+
+  - name: "compgen -X with extglob"
+    stdin: |
+      touch README
+      shopt -s extglob
+
+      echo "[Take 1]"
+      compgen -f READ
+
+      echo "[Take 2]"
+      compgen -f -X "READ" READ
+
+      echo "[Take 3]"
+      compgen -f -X "README" READ
+
+      echo "[Take 4]"
+      compgen -f -X "!(READ)" READ
+
+      echo "[Take 5]"
+      compgen -f -X "!(README)" READ
+
+      echo "[Take 6]"
+      compgen -f -X "!!(READ)" READ
+
+      echo "[Take 7]"
+      compgen -f -X "!!(README)" READ
+
+  - name: "compgen -o dirnames"
+    stdin: |
+      echo "[Take 1]"
+      compgen -W 'completion' -o dirnames -- c | sort
+
+      echo "[Take 2]"
+      mkdir subdir
+      touch subfile
+      compgen -W 'completion' -o dirnames -- s | sort
+
+      echo "[Take 3]"
+      mkdir cdir cdir2
+      touch cfile
+      compgen -W 'completion' -o dirnames -- c | sort
+
+      echo "[Take 4]"
+      compgen -W 'nomatch' -o dirnames -- c | sort
+
+      echo "[Take 5]"
+      compgen -o dirnames -- c | sort
+
+      echo "[Take 6]"
+      compgen -W 'completion' -o dirnames -o plusdirs -- c | sort
+
+  - name: "compgen -o default"
+    stdin: |
+      echo "[Take 1]"
+      compgen -W 'completion' -o default -- c | sort
+
+      echo "[Take 2]"
+      mkdir subdir
+      touch subfile
+      compgen -W 'completion' -o default -- s | sort
+
+  - name: "compgen -o bashdefault"
+    stdin: |
+      echo "[Take 1]"
+      compgen -W 'completion' -o bashdefault -- c | sort
+
+      echo "[Take 2]"
+      mkdir subdir
+      touch subfile
+      compgen -W 'completion' -o bashdefault -- s | sort
+
+  - name: "compgen -o plusdirs"
+    stdin: |
+      echo "[Take 1]"
+      touch cfile
+      mkdir cdir
+      compgen -W 'completion' -o plusdirs -o default -S suffix -- c | sort
+
+  - name: "compgen -A command"
+    # Temporarily marked unconstrained Path case as `skip: true` to keep CI stable.
+    # Environment-dependent due to host PATH contents(Ubuntu includes X11, while Arch and others do not).
+    skip: true
+    stdin: |
+      compgen -A command | sort | grep -v "^brush"
+
+  - name: "compgen -A command in a constrained PATH"
+    stdin: |
+      SORT=$(command -v sort)
+      GREP=$(command -v grep)
+      PATH=$(pwd)
+      compgen -A command | $SORT | $GREP -v "^brush"
+
+  - name: "compgen -A command builtins in a constrained PATH"
+    stdin: |
+      SORT=$(command -v sort)
+      PATH=$(pwd)
+      compgen -A command cd | $SORT
+
+  - name: "compgen -A command keywords in a constrained PATH"
+    stdin: |
+      SORT=$(command -v sort)
+      PATH=$(pwd)
+      compgen -A command [ | $SORT
+
+  - name: "compgen -A command function in a constrained PATH"
+    stdin: |
+      SORT=$(command -v sort)
+      PATH=$(pwd)
+      myfunc() {
+        echo hi
+      }
+      myfunc2() {
+        echo hello
+      }
+      compgen -A command myfunc | $SORT
+
+  - name: "compgen -A command with executable symlink"
+    stdin: |
+      #             pwd
+      #  drwxr-xr-x ├──  test-bin
+      # .rwxr-xr-x  │   ├──  dummy_exe
+      # .rw-r--r--  │   └──  dummy_non_exe
+      # drwxr-xr-x  └──  test-links
+      # lrwxrwxrwx      ├──  link_valid         ⇒ $(pwd)/test-bin/dummy_exe
+      # lrwxrwxrwx      └──  link_valid_exe_rec ⇒ $(pwd)/test-links/link_valid
+      # lrwxrwxrwx      ├──  link_non_exec      ⇒ $(pwd)/test-bin/dummy_non_exe
+      # lrwxrwxrwx      ├──  link_broken        ⇒ $(pwd)/test-bin/dummy_non_exist
+      #
+      mkdir test-bin
+      touch test-bin/dummy_exe
+      touch test-bin/dummy_non_exe
+      chmod +x test-bin/dummy_exe
+
+      mkdir test-links
+      ln -s $(pwd)/test-bin/dummy_exe       $(pwd)/test-links/link_valid
+      ln -s $(pwd)/test-links/link_vaild    $(pwd)/test-links/link_valid_rec
+      ln -s $(pwd)/test-bin/dummy_non_exe   $(pwd)/test-links/link_non_exec
+      ln -s $(pwd)/test-bin/dummy_non_exist $(pwd)/test-links/link_broken
+
+      PATH="$(pwd)/test-links:$PATH"
+
+      echo "[Valid]"
+      compgen -A command -- link_valid | sort
+
+      echo "[Invalid]"
+      compgen -A command -- link_non_exec
+      compgen -A command -- link_broken
+
+  - name: "compgen -A command includes aliases but not disabled builtins, in order"
+    stdin: |
+      mkdir test-bin
+      touch test-bin/zzqx
+      chmod +x test-bin/zzqx
+      PATH="$(pwd)/test-bin:$PATH"
+      alias zzqc=1 zzqa=1
+      zzqf() { :; }
+      zzqb() { :; }
+      enable -n caller
+      compgen -A command zzq
+      echo "[disabled]"
+      compgen -A command caller
+
+  - name: "compgen -k lists keywords in bash's order"
+    stdin: |
+      compgen -k
+
+  - name: "compgen -A command lists keywords in bash's order"
+    stdin: |
+      PATH=/nonexistent
+      compgen -A command -- do
+      for w in $(compgen -A command -- f); do
+        case $w in fi|for|function) echo "$w" ;; esac
+      done
+
+  - name: "compgen -F ignores a function that asks for completion to restart"
+    ignore_stderr: true
+    stdin: |
+      _comp() { COMPREPLY=(a); return 124; }
+      compgen -F _comp mycmd
+      echo "rc=$?"
+
+  - name: "compgen -F tells the function about an empty line"
+    ignore_stderr: true
+    stdin: |
+      _comp() {
+        echo "#=$# 1=<$1> 2=<$2> 3=<$3> LINE=<$COMP_LINE> POINT=<$COMP_POINT>"
+        echo "WORDS=<${COMP_WORDS[*]}> NWORDS=${#COMP_WORDS[@]} CWORD=<$COMP_CWORD>"
+      }
+      compgen -F _comp xy
+
+  - name: "compgen -C tells the command about an empty line"
+    ignore_stderr: true
+    stdin: |
+      compgen -C 'printf "<%s>\n"' xy
+      _cmd() { echo "LINE=<$COMP_LINE> POINT=<$COMP_POINT> #=$#"; }
+      export -f _cmd
+      compgen -C _cmd xy
+
+  - name: "compgen -F sets COMP_KEY and COMP_TYPE to 0"
+    ignore_stderr: true
+    stdin: |
+      _comp() { echo "KEY=${COMP_KEY:-unset} TYPE=${COMP_TYPE:-unset}"; COMPREPLY=(); }
+      compgen -F _comp mycmd
+
+  - name: "compgen -C passes words with commas or braces intact"
+    ignore_stderr: true
+    stdin: |
+      compgen -C 'printf "<%s>\n"' -- 'a,b' | grep -F '<a,b>'
+      compgen -C 'printf "<%s>\n"' -- '{a,b}' | grep -F '<{a,b}>'
+
+  - name: "compgen -F leaves no COMP_* variables set"
+    stdin: |
+      f() { :; }
+      compgen -F f x 2>/dev/null
+      echo "[${COMP_LINE-unset}] [${COMP_POINT-unset}] [${COMP_CWORD-unset}]"
+
+  - name: "compgen -F leaves no COMP_* variables set, even ones set before or re-created"
+    stdin: |
+      COMP_LINE=user
+      f() { unset COMP_WORDS COMP_CWORD; COMP_WORDS=(n e w); COMP_CWORD=1; }
+      compgen -F f x 2>/dev/null
+      echo "[${COMP_LINE-unset}] [${COMP_WORDS[*]-unset}] [${COMP_CWORD-unset}]"
+
+  - name: "compgen -F function's prefix assignment to a COMP_* variable is temporary"
+    stdin: |
+      f() {
+        before=$COMP_LINE
+        COMP_LINE=changed true
+        [[ $COMP_LINE == "$before" ]] && echo same
+        env | grep -c ^COMP_LINE
+      }
+      compgen -F f x 2>/dev/null
+
+  - name: "compgen -A helptopic includes keywords"
+    known_failure: true # brush's help topics are only its builtins
+    stdin: |
+      compgen -A helptopic whil
+
+  - name: "compgen -V"
+    known_failure: true # brush's compgen doesn't take -V
+    min_oracle_version: 5.3
+    stdin: |
+      compgen -V out -W 'a b c' -- b; echo "rc=$?"
+      declare -p out
+
+  - name: "compgen -W closes a quote left open at the end of the list"
+    stdin: |
+      compgen -W 'fo"o'; echo "rc=$?"
+      compgen -W 'fo"o bar'; echo "rc=$?"
+      compgen -W 'fo"o bar' -- f; echo "rc=$?"
+      compgen -W "a 'b c"; echo "rc=$?"
+      # A backslash left dangling at the end is dropped, except in single quotes.
+      word='fo"o\'; compgen -W "$word"; echo "rc=$?"
+      word='fo\'; compgen -W "$word"; echo "rc=$?"
+      word="fo'o\\"; compgen -W "$word"; echo "rc=$?"
+
+  - name: "compgen -W with a $ before a quote"
+    # Only the lists that bash reads as a command line would. brush reads every list that way,
+    # deliberately unlike bash; see the brush-specific completion cases.
+    stdin: |
+      compgen -W "\"\$'a\" a\\\$'b'"
+      compgen -W "\$\$'a' \$\$\"b\" \$\$\$\$'d'" | sed "s/$$/PID/g"
+      compgen -W "\$(echo \$'\\x41') \`echo \$'\\x42'\`"
+
+  - name: "compgen -W with an expansion error"
+    known_failure: true # brush's compgen fails with status 1, and the line carries on
+    ignore_stderr: true
+    stdin: |
+      w='a $(echo b'; compgen -W "$w"; echo "rc=$?"
+      echo next1
+      w='a ${x c'; compgen -W "$w"; echo "rc=$?"
+      echo next2
+
+  - name: "compgen -W with an unset variable under set -u"
+    known_failure: true # brush's compgen fails with status 1, and the script carries on
+    ignore_stderr: true
+    stdin: |
+      set -u
+      compgen -W '$nope'; echo "rc=$?"
+      echo next
+
+  - name: "compgen -W with ${x?} on an unset variable"
+    known_failure: true # TODO(builtins): brush's compgen fails with status 1, and the script carries on
+    ignore_stderr: true
+    stdin: |
+      compgen -W '${nope?boom}'; echo "rc=$?"
+      echo next
+
+  - name: "compgen -W with an unset variable under set -u, in a function"
+    known_failure: true # TODO(builtins): brush's compgen fails with status 1, and the function and script carry on
+    ignore_stderr: true
+    stdin: |
+      set -u
+      f() { compgen -W '$nope'; echo "in f: $?"; }
+      f; echo "rc=$?"
+      echo next
+
+  - name: "compgen -W with an unset variable under set -u, before ||"
+    known_failure: true # TODO(builtins): brush's compgen fails with status 1, and || handles it
+    ignore_stderr: true
+    stdin: |
+      set -u
+      compgen -W '$nope' || echo handled; echo "rc=$?"
+      echo next
+
+  - name: "command compgen -W with ${x?} on an unset variable"
+    known_failure: true # TODO(builtins): brush's compgen fails with status 1, and the script carries on
+    ignore_stderr: true
+    stdin: |
+      command compgen -W '${nope?boom}'; echo "rc=$?"
+      echo next
+
+  - name: "compgen -W with an unset variable under set -u ends only its subshell"
+    known_failure: true # TODO(builtins): brush's compgen fails with status 1, and the subshell carries on
+    ignore_stderr: true
+    stdin: |
+      ( set -u; compgen -W '$nope'; echo in-sub ); echo "rc=$?"
+      echo next

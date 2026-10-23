@@ -1,0 +1,20 @@
+name: "Builtin Common Tests"
+cases:
+  - name: "Piping builtin output"
+    stdin: |
+      shopt | wc -l | wc -l
+
+  - name: "Redirecting builtin output"
+    stdin: |
+      declare my_variable=10
+      declare -p my_variable >out.txt
+
+      echo "Dumping file contents..."
+      cat out.txt
+
+  - name: "Overrides"
+    ignore_stderr: true
+    stdin: |
+      declare -p myvar
+      myvar=10 declare -p myvar
+      declare -p myvar

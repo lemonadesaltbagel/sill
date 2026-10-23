@@ -1,0 +1,250 @@
+name: "Functions"
+cases:
+  - name: "Basic function invocation"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          myfunc() {
+              echo "In myfunc()."
+          }
+          echo "Calling myfunc()..."
+          myfunc
+          echo "Returned."
+    args: ["./script.sh"]
+
+  - name: "Function invocation with args"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          myfunc() {
+              echo "In myfunc()"
+              echo "1: $1"
+              echo "*: $*"
+          }
+          echo "Calling myfunc()..."
+          myfunc a b c
+          echo "Returned."
+    args: ["./script.sh"]
+
+  - name: "Function invocation with empty arg"
+    stdin: |
+      myfunc() {
+          echo "count: ${#*}"
+          echo "\$1: $1"
+          echo "\$2: $2"
+          echo "\$3: $3"
+      }
+
+      myfunc a b c
+      myfunc a "" c
+
+  - name: "Function definition with output redirection"
+    stdin: |
+      myfunc() {
+          echo "In myfunc()"
+      } >>./test.txt
+
+      myfunc
+      myfunc
+
+  - name: "Function call with env variables"
+    stdin: |
+      myfunc() {
+          echo ${myvar}
+      }
+
+      myvar="default"
+      myfunc
+      myvar="overridden" myfunc
+      myfunc
+
+  - name: "Function definition without braces"
+    stdin: |
+      myfunc()
+      if true; then
+        echo true
+      else
+        echo false
+      fi
+
+      myfunc
+
+  - name: "Function with extended test body"
+    stdin: |
+      is_thing() [[ -n $1 ]]
+
+      is_thing hello && echo "hello is a thing"
+      is_thing "" || echo "empty string is not a thing"
+
+  - name: "Function with extended test body and redirect"
+    stdin: |
+      is_thing() [[ -n $1 ]] 2>/dev/null
+
+      is_thing hello
+      echo "Result: $?"
+
+  - name: "Nested function definition"
+    stdin: |
+      outer() {
+        echo "Entered outer"
+
+        inner() {
+          echo "In inner"
+        }
+
+        echo "Invoking inner"
+
+        inner
+
+        echo "Returning from outer"
+      }
+
+      echo "Calling outer from toplevel"
+      outer
+
+      echo "Calling inner from toplevel"
+      inner
+
+  - name: "Exporting functions to child instance"
+    stdin: |
+      mytestfunc() {
+          echo "In mytestfunc"
+      }
+
+      export -f mytestfunc
+
+      $0 -c 'mytestfunc'
+
+  - name: "Function names with interesting characters"
+    stdin: |
+      my/func() {
+          echo "In my/func"
+      }
+
+      my/func
+
+  - name: "Functions shadowing builtins"
+    stdin: |
+      .() {
+          echo "In custom dot function"
+      }
+
+      echo "Func result: $?"
+
+      .
+      echo "Call result: $?"
+
+  - name: "Reserved words cannot be used as function names without function keyword"
+    ignore_stderr: true
+    stdin: |
+      for (){ :; }
+      echo "exit: $?"
+
+  - name: "Reserved words can be used as function names with function keyword"
+    stdin: |
+      function for { echo "custom for"; }
+      for x in 1; do echo "normal for: $x"; done
+
+  - name: "Reserved words can be used as function names with function keyword and parens"
+    stdin: |
+      function while() { echo "custom while"; }
+      while false; do echo "nope"; done
+      echo "done"
+
+  - name: "Functions shadowing builtins (POSIX mode)"
+    ignore_stderr: true
+    stdin: |
+      set -o posix
+
+      .() {
+          echo "In custom dot function"
+      }
+
+      echo "Func result: $?"
+
+      .
+      echo "Call result: $?"
+
+  - name: "Empty string arguments preserved with nullglob"
+    stdin: |
+      shopt -s nullglob
+      
+      myfunc() {
+          echo "arg count: $#"
+          for arg in "$@"; do
+              echo "arg: '$arg'"
+          done
+      }
+      
+      myfunc 3 - 2 "" 1.2.3b_alpha4
+
+  - name: "Multiple empty string arguments"
+    stdin: |
+      myfunc() {
+          echo "count: $#"
+          echo "1: '$1'"
+          echo "2: '$2'"
+          echo "3: '$3'"
+          echo "4: '$4'"
+      }
+      
+      myfunc "" "non-empty" "" "last"
+
+  - name: "Prefix assignment in a function leaves the caller's prefix assignment alone"
+    stdin: |
+      f() { FOO=2 true; echo "[$FOO]"; }
+      FOO=1 f
+      g() { FOO=2 h; echo "[$FOO]"; }
+      h() { echo "h: $FOO"; }
+      FOO=1 g
+
+  - name: "Prefix assignments to one variable build on each other"
+    stdin: |
+      f() { echo "[$FOO]"; }
+      FOO=1 FOO+=2 f
+
+  - name: "Prefix assignment with += appends to the value where it's visible"
+    stdin: |
+      BAR=a
+      BAR+=b env | grep ^BAR=
+      declare -i N=5
+      N+=3 env | grep ^N=
+      f() { FOO+=2 g; echo "[$FOO]"; }
+      g() { echo "g: $FOO"; }
+      FOO=1 f
+      echo "[$BAR] [$N]"
+
+  - name: "Prefix assignment can't override a readonly variable"
+    ignore_stderr: true
+    stdin: |
+      g() { echo "g: $FOO"; }
+      f() { readonly FOO; FOO=2 g; echo "f: $FOO rc=$?"; }
+      FOO=1 f
+      k() { echo "k: $L"; }
+      h() { local -r L=1; L=2 k; echo "h: rc=$?"; }
+      h
+      readonly R=1
+      R=2 B=3 env | grep -E '^(R|B)='
+      echo "R=$R"
+
+  - name: "A function definition's redirection applies to the function's errors"
+    known_failure: true # TODO(errors): an error is reported after the redirections around it are undone
+    stdin: |
+      f() { echo ${x?boom}; } 2>/dev/null
+      f | cat
+      echo "after f: ${PIPESTATUS[*]}"
+      readonly r=1
+      g() { r=2; } 2>/dev/null
+      g
+      echo "after g: $?"
+
+  - name: "A compound command's redirection applies to errors in it"
+    known_failure: true # TODO(errors): an error is reported after the redirections around it are undone
+    stdin: |
+      readonly r=1
+      { r=2; } 2>/dev/null
+      echo "after group: $?"
+      { echo ${y?b}; } 2>/dev/null &
+      wait
+      echo "after job"
+

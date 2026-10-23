@@ -1,0 +1,515 @@
+name: "Builtins: getopts"
+cases:
+  - name: "Basic getopts"
+    stdin: |
+      func() {
+        echo "Beginning of args"
+        while getopts "ab:" option "$@"; do
+          case ${option} in
+            a) echo "Option a; OPTARG=${OPTARG}";;
+            b) echo "Option b; OPTARG=${OPTARG}";;
+            *) echo "Unknown option: ${option}";;
+          esac
+          echo "OPTIND is now ${OPTIND}"
+          echo "OPTERR is now ${OPTERR}"
+        echo "----------------"
+        done
+        echo "Result: $?"
+        echo "option: ${option}"
+        echo "End of args"
+      }
+
+      func -a -b my_b_arg
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: no args"
+    stdin: |
+      getopts "a:b:" myvar
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: toplevel positional parameters"
+    stdin: |
+      set -- -a value    
+      getopts "a:b:" myvar
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: function positional parameters"
+    stdin: |
+      my_function() {
+        getopts "a:b:" myvar
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+      }
+
+      my_function -b value
+
+  - name: "getopts: function script parameters"
+    test_files:
+      - path: script.sh
+        contents: |
+          getopts "a:b:" myvar
+          echo "Result: $?"
+          echo "myvar: ${myvar}"
+          echo "OPTARG: ${OPTARG}"
+          echo "OPTIND: ${OPTIND}"
+          echo "OPTERR: ${OPTERR}"
+    stdin: |
+      source ./script.sh -a value
+
+  - name: "getopts: no options given"
+    stdin: |
+      while getopts "a:b:" myvar notoption; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: options and non-options"
+    stdin: |
+      while getopts "ab:" myvar -a -b value notoption; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: --"
+    stdin: |
+      while getopts "ab:" myvar -a -b value -- -c notoption; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: -- as first arg"
+    stdin: |
+      while getopts "ab:" myvar -- -a; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: invalid option when optstr starts with colon"
+    stdin: |
+      getopts ":a:" myvar -b value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: invalid option when optstr does not start with colon"
+    ignore_stderr: true
+    stdin: |
+      getopts "a:" myvar -b value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: multiple options in one token"
+    stdin: |
+      while getopts "a:bcdefg" myvar -fedcba something -g; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+  - name: "getopts: short option and value in single arg"
+    stdin: |
+      getopts "p:" myvar -p-
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+      echo "OPTERR: ${OPTERR}"
+
+      while getopts "abep:" myvar -abpsomething-else; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG}"
+        echo "OPTIND: ${OPTIND}"
+        echo "OPTERR: ${OPTERR}"
+        echo "-----------------"
+      done
+
+  - name: "getopts: OPTERR=0 suppresses error for unknown option"
+    stdin: |
+      OPTERR=0
+      getopts "a:" myvar -x 2>/dev/null
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTERR=1 shows error for unknown option"
+    ignore_stderr: true
+    stdin: |
+      OPTERR=1
+      getopts "a:" myvar -x
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTERR nonzero shows error"
+    ignore_stderr: true
+    stdin: |
+      OPTERR=42
+      getopts "a:" myvar -x
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+
+  - name: "getopts: missing required argument without leading colon"
+    ignore_stderr: true
+    stdin: |
+      getopts "a:" myvar -a
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: missing required argument with leading colon"
+    stdin: |
+      getopts ":a:" myvar -a
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: missing required argument with OPTERR=0"
+    stdin: |
+      OPTERR=0
+      getopts "a:" myvar -a 2>/dev/null
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: combined unknown and missing arg errors"
+    ignore_stderr: true
+    stdin: |
+      func() {
+        while getopts "a:b:" opt "$@"; do
+          case "$opt" in
+            a) echo "a=$OPTARG" ;;
+            b) echo "b=$OPTARG" ;;
+            \?) echo "unknown" ;;
+            :) echo "missing arg for $OPTARG" ;;
+          esac
+        done
+      }
+      func -a foo -x -b
+      echo "Done: $?"
+
+  - name: "getopts: bare dash as argument"
+    stdin: |
+      getopts "ab:" myvar -
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: leading colon with dash-colon option"
+    stdin: |
+      getopts ":a:" myvar -:
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: unknown option in middle of combined flags"
+    ignore_stderr: true
+    stdin: |
+      while getopts "ac" myvar -axc; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG-UNSET}"
+        echo "OPTIND: ${OPTIND}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+
+  - name: "getopts: missing arg in combined flags"
+    ignore_stderr: true
+    stdin: |
+      while getopts "a:b" myvar -ba; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG-UNSET}"
+        echo "OPTIND: ${OPTIND}"
+        echo "----------------"
+      done
+      echo "Final: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: combined flags with arg-taking option consumes next arg"
+    stdin: |
+      while getopts "a:b" myvar -ba nextarg; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG-UNSET}"
+        echo "OPTIND: ${OPTIND}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTIND reset between calls"
+    stdin: |
+      while getopts "a:b" myvar -b -a foo; do
+        echo "myvar: ${myvar}; OPTARG: ${OPTARG-UNSET}; OPTIND: ${OPTIND}"
+      done
+      echo "--- reset ---"
+      OPTIND=1
+      while getopts "a:b" myvar -b -a bar; do
+        echo "myvar: ${myvar}; OPTARG: ${OPTARG-UNSET}; OPTIND: ${OPTIND}"
+      done
+
+  - name: "getopts: empty optstring"
+    ignore_stderr: true
+    stdin: |
+      getopts "" myvar -a
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTIND=0"
+    stdin: |
+      OPTIND=0
+      getopts "a:" myvar -a value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: negative OPTIND treated as reset"
+    stdin: |
+      OPTIND=-1
+      getopts "a:" myvar -a value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: bare dash among other args"
+    stdin: |
+      while getopts "ab" myvar -a - -b; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG-UNSET}"
+        echo "OPTIND: ${OPTIND}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTIND past end of args"
+    stdin: |
+      OPTIND=100
+      getopts "a:b:" myvar -a value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: missing arg with leading colon in combined flags"
+    stdin: |
+      while getopts ":a:b" myvar -ba; do
+        echo "Result: $?"
+        echo "myvar: ${myvar}"
+        echo "OPTARG: ${OPTARG-UNSET}"
+        echo "OPTIND: ${OPTIND}"
+        echo "----------------"
+      done
+      echo "Done; result: $?"
+
+  - name: "getopts: non-numeric OPTIND treated as reset"
+    stdin: |
+      OPTIND=abc
+      getopts "a:" myvar -a value
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: option value is empty string"
+    stdin: |
+      getopts "a:" myvar -a ""
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: '${OPTARG}'"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: option value looks like another option"
+    stdin: |
+      getopts "a:b" myvar -a -b
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: OPTIND=0 resets mid-parse of combined options"
+    stdin: |
+      getopts "abc" myvar -abc
+      echo "first: ${myvar}"
+      OPTIND=0
+      getopts "abc" myvar -abc
+      echo "after reset: ${myvar}"
+
+  - name: "getopts: OPTERR non-numeric treated as enabled"
+    ignore_stderr: true
+    stdin: |
+      OPTERR=abc
+      getopts "a:" myvar -x
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: invalid variable name rejected"
+    ignore_stderr: true
+    stdin: |
+      getopts "a" "123abc" -a
+      echo "Result: $?"
+
+  - name: "getopts: duplicate option char in optstring uses first definition"
+    stdin: |
+      getopts "aa:" myvar -a val
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: optstring is only a colon"
+    ignore_stderr: true
+    stdin: |
+      getopts ":" myvar -a
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTARG: ${OPTARG-UNSET}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts: empty string argument is not an option"
+    stdin: |
+      getopts "a" myvar ""
+      echo "Result: $?"
+      echo "myvar: ${myvar}"
+      echo "OPTIND: ${OPTIND}"
+
+  - name: "getopts writes through nameref"
+    known_failure: true
+    stdin: |
+      declare -n ref=result
+      getopts "a:b" ref -a value
+      echo "Result: $?"
+      echo "result: ${result}"
+      echo "ref: ${ref}"
+      echo "OPTARG: ${OPTARG}"
+
+  - name: "getopts writes through subscripted nameref"
+    known_failure: true
+    stdin: |
+      arr=(x x x)
+      declare -n ref='arr[1]'
+      getopts "a:b" ref -a value
+      echo "Result: $?"
+      echo "arr[1]: ${arr[1]}"
+      echo "ref: ${ref}"
+
+  - name: "getopts reads a leading -- as the end of its own options"
+    known_failure: true # TODO(getopts): its arguments are split at the first `--`, so a leading one isn't the end of getopts' own options
+    stdin: |
+      getopts -- ab opt -a
+      echo "status=$? opt=$opt"
+
+  - name: "getopts --help prints help on stdout"
+    known_failure: true # TODO(getopts): brush reports missing operands instead
+    stdin: |
+      getopts --help >/dev/null 2>&1; echo "rc=$?"
+      [[ -n $(getopts --help 2>/dev/null) ]] && echo "help on stdout"
+
+  - name: "getopts rejects a name that isn't an identifier"
+    stdin: |
+      strip() { sed -E 's/\x1b\[[0-9;]*m//g; s/^[^ ]*: line [0-9]+: //; s/^error: //'; }
+      getopts a 1x -a 2>err.txt; echo "getopts: $?"; strip <err.txt
+      rm err.txt
+
+  - name: "getopts keeps its place in bundled options out of shell variables"
+    stdin: |
+      set -- -ab
+      getopts ab opt; echo "opt=$opt OPTIND=$OPTIND"
+      for name in $(compgen -v); do
+        [[ $name == *GETOPTS* ]] && echo "variable: $name=${!name}"
+      done
+      echo "prefixed: [${!__GETOPTS@}]"
+      getopts ab opt; echo "opt=$opt OPTIND=$OPTIND"
+
+  - name: "getopts' place in bundled options follows subshell rules"
+    stdin: |
+      set -- -ab -c
+      getopts abc opt; echo "1: opt=$opt OPTIND=$OPTIND"
+      (getopts abc opt; echo "subshell: opt=$opt OPTIND=$OPTIND")
+      echo "substitution: $(getopts abc opt; echo "opt=$opt OPTIND=$OPTIND")"
+      getopts abc opt; echo "2: opt=$opt OPTIND=$OPTIND"
+      getopts abc opt; echo "3: opt=$opt OPTIND=$OPTIND"
+      OPTIND=1
+      getopts abc opt; echo "after reset: opt=$opt OPTIND=$OPTIND"

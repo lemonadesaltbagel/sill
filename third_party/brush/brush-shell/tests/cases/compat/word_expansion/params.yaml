@@ -1,0 +1,921 @@
+name: "Parameter expansion"
+cases:
+  - name: "String length"
+    stdin: |
+      x="abc"
+      echo "len = ${#x}"
+
+  - name: "Parameter expression: default value"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # -
+      echo "\${value-default}       : ${value-default}"
+      echo "\${empty-default}       : ${empty-default}"
+      echo "\${declared-default}    : ${declared-default}"
+      echo "\${undeclared-default}  : ${undeclared-default}"
+
+      echo "\${value-}              : ${value-}"
+      echo "\${empty-}              : ${empty-}"
+      echo "\${declared-}           : ${declared-}"
+      echo "\${undeclared-}         : ${undeclared-}"
+
+      # :-
+      echo "\${value:-default}      : ${value:-default}"
+      echo "\${empty:-default}      : ${empty:-default}"
+      echo "\${declared:-default}   : ${declared:-default}"
+      echo "\${undeclared:-default} : ${undeclared:-default}"
+
+      echo "\${value:-}             : ${value:-}"
+      echo "\${empty:-}             : ${empty:-}"
+      echo "\${declared:-}          : ${declared:-}"
+      echo "\${undeclared:-}        : ${undeclared:-}"
+
+  - name: "Parameter expression: assign default value (no colon)"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # =
+      echo "\${value=default}       : ${value=default}"
+      declare -p value
+      echo "\${empty=default}       : ${empty=default}"
+      declare -p empty
+      echo "\${declared=default}    : ${declared=default}"
+      declare -p declared
+      echo "\${undeclared=default}  : ${undeclared=default}"
+      declare -p undeclared
+
+  - name: "Parameter expression: assign default value (no colon, empty replacement)"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # =
+      echo "\${value=}              : ${value=}"
+      declare -p value
+      echo "\${empty=}              : ${empty=}"
+      declare -p empty
+      echo "\${declared=}           : ${declared=}"
+      declare -p declared
+      echo "\${undeclared=}         : ${undeclared=}"
+      declare -p undeclared
+
+  - name: "Parameter expression: assign default value (colon)"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # :=
+      echo "\${value:=default}       : ${value:=default}"
+      declare -p value
+      echo "\${empty:=default}       : ${empty:=default}"
+      declare -p empty
+      echo "\${declared:=default}    : ${declared:=default}"
+      declare -p declared
+      echo "\${undeclared:=default}  : ${undeclared:=default}"
+      declare -p undeclared
+
+  - name: "Parameter expression: assign default value (colon, empty replacement)"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # :=
+      echo "\${value:=}              : ${value:=}"
+      declare -p value
+      echo "\${empty:=}              : ${empty:=}"
+      declare -p empty
+      echo "\${declared:=}           : ${declared:=}"
+      declare -p declared
+      echo "\${undeclared:=}         : ${undeclared:=}"
+      declare -p undeclared
+
+  - name: "Parameter expression: alternative value"
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # +
+      echo "\${value+default}       : ${value+default}"
+      echo "\${empty+default}       : ${empty+default}"
+      echo "\${declared+default}    : ${declared+default}"
+      echo "\${undeclared+default}  : ${undeclared+default}"
+
+      echo "\${value+}              : ${value+}"
+      echo "\${empty+}              : ${empty+}"
+      echo "\${declared+}           : ${declared+}"
+      echo "\${undeclared+}         : ${undeclared+}"
+
+      # :+
+      echo "\${value:+default}      : ${value:+default}"
+      echo "\${empty:+default}      : ${empty:+default}"
+      echo "\${declared:+default}   : ${declared:+default}"
+      echo "\${undeclared:+default} : ${undeclared:+default}"
+
+      echo "\${value:+}             : ${value:+}"
+      echo "\${empty:+}             : ${empty:+}"
+      echo "\${declared:+}          : ${declared:+}"
+      echo "\${undeclared:+}        : ${undeclared:+}"
+
+  - name: "Parameter expression: advanced alternative value"
+    stdin: |
+      value="value"
+
+      echo ${value:+\x}
+      echo ${value:+'x'}
+      echo "${value:+\x}"
+      echo "${value:+'x'}"
+      echo "${value:+x y}"
+      echo "${value:+z 'x' 'y' w}"
+      echo "${value:+x'y'x}"
+      echo "${value:+"x y"}"
+      echo "${value:+"x\xy"}"
+      echo "${value:+z"x\xy"z}"
+
+  - name: "Parameter expression: conditional on empty/unset array"
+    stdin: |
+      empty=()
+      declare -A assoc=()
+      nonempty=(one two)
+      single=("")
+
+      # An array referenced via [@]/[*] with no elements is treated as unset
+      # for the +/- operators (without colon).
+      echo "empty[@]+      : [${empty[@]+ALT}]"
+      echo "empty[*]+      : [${empty[*]+ALT}]"
+      echo "empty[@]-      : [${empty[@]-DEF}]"
+      echo "empty[*]-      : [${empty[*]-DEF}]"
+      echo "empty[@] multi : [${empty[@]+one two}]"
+
+      # Associative empty array behaves the same way.
+      echo "assoc[@]+      : [${assoc[@]+ALT}]"
+      echo "assoc[@]-      : [${assoc[@]-DEF}]"
+
+      # Colon variants treat empty array as unset/null too.
+      echo "empty[@]:+     : [${empty[@]:+ALT}]"
+      echo "empty[@]:-     : [${empty[@]:-DEF}]"
+
+      # A non-empty array is set; a single empty element still counts as set.
+      echo "nonempty[@]+   : [${nonempty[@]+ALT}]"
+      echo "nonempty[@]-   : [${nonempty[@]-DEF}]"
+      echo "single[@]+     : [${single[@]+ALT}]"
+      echo "single[@]-     : [${single[@]-DEF}]"
+
+  - name: "Parameter expression: index-listing combined with conditional operator"
+    # brush currently fails to parse the ${!arr[@]} index-listing form when it is
+    # combined with a conditional operator (+/-/:+/:-). bash accepts it; for an
+    # empty array the indices are unset, so these forms behave like an unset value.
+    # (Non-empty arrays intentionally omitted: there bash reinterprets `!` as
+    # indirection, which is a separate behavior.)
+    known_failure: true
+    stdin: |
+      empty=()
+      echo "[${!empty[@]+ALT}]"
+      echo "[${!empty[@]-DEF}]"
+      echo "[${!empty[*]+ALT}]"
+      echo "[${!empty[@]:+ALT}]"
+      echo "[${!empty[@]:-DEF}]"
+
+  - name: "Parameter expression: error on condition (interactive)"
+    ignore_stderr: true
+    args: ["-i"]
+    stdin: |
+      value="value"
+      empty=""
+      declare declared
+      unset undeclared
+
+      # ?
+      echo "\${value?error message}       : ${value?error message}"
+      echo "  -> result: $?"
+      echo "\${empty?error message}       : ${empty?error message}"
+      echo "  -> result: $?"
+      echo "\${declared?error message}    : ${declared?error message}"
+      echo "  -> result: $?"
+      echo "\${undeclared?error message}  : ${undeclared?error message}"
+      echo "  -> result: $?"
+
+      echo "\${value?}                    : ${value?}"
+      echo "  -> result: $?"
+      echo "\${empty?}                    : ${empty?}"
+      echo "  -> result: $?"
+      echo "\${declared?}                 : ${declared?}"
+      echo "  -> result: $?"
+      echo "\${undeclared?}               : ${undeclared?}"
+      echo "  -> result: $?"
+
+      # :?
+      echo "\${value:?error message}      : ${value:?error message}"
+      echo "  -> result: $?"
+      echo "\${empty:?error message}      : ${empty:?error message}"
+      echo "  -> result: $?"
+      echo "\${declared:?error message}   : ${declared:?error message}"
+      echo "  -> result: $?"
+      echo "\${undeclared:?error message} : ${undeclared:?error message}"
+      echo "  -> result: $?"
+
+      echo "\${value:?}                   : ${value:?}"
+      echo "  -> result: $?"
+      echo "\${empty:?}                   : ${empty:?}"
+      echo "  -> result: $?"
+      echo "\${declared:?}                : ${declared:?}"
+      echo "  -> result: $?"
+      echo "\${undeclared:?}              : ${undeclared:?}"
+      echo "  -> result: $?"
+
+  - name: "Parameter expression: error on condition (non-interactive)"
+    ignore_stderr: true
+    stdin: |
+      echo "${non_existent_var?error message}"
+      echo "This should never execute"
+
+  - name: "Parameter expression: expanded array as alternate value"
+    stdin: |
+      declare -a var=("abc" "def" "ghi" "")
+
+      for item in "${var[@]}"; do
+        echo "Item: '${item}'"
+      done
+
+      echo "Expression 1: '${var+"${var[@]}"}'"
+      for item in "${var+"${var[@]}"}"; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 2: '${var+${var[@]}}'"
+      for item in "${var+${var[@]}}"; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 3: '${var+"${var[@]}"}'"
+      for item in ${var+"${var[@]}"}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 4: '${var+${var[@]}}'"
+      for item in ${var+${var[@]}}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 5: '${var+"${var[*]}"}'"
+      for item in "${var+"${var[*]}"}"; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 6: '${var+${var[*]}}'"
+      for item in "${var+${var[*]}}"; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 7: '${var+"${var[*]}"}'"
+      for item in ${var+"${var[*]}"}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 8: '${var+${var[*]}}'"
+      for item in ${var+${var[*]}}; do
+        echo "  -> '${item}'"
+      done
+
+  - name: "Parameter expression: expanded array as default value"
+    stdin: |
+      declare -a var=("abc" "def" "ghi" "")
+
+      for item in "${var[@]}"; do
+        echo "Item: '${item}'"
+      done
+
+      echo "Expression 1: ${nonexistent-${var[@]}}"
+      for item in ${nonexistent-${var[@]}}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 2: ${nonexistent-"${var[@]}"}"
+      for item in ${nonexistent-"${var[@]}"}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 3: ${nonexistent2=${var[@]}}"
+      for item in ${nonexistent3=${var[@]}}; do
+        echo "  -> '${item}'"
+      done
+
+      echo "Expression 4: ${nonexistent4="${var[@]}"}"
+      for item in ${nonexistent5-"${var[@]}"}; do
+        echo "  -> '${item}'"
+      done
+
+  - name: "Remove prefix/suffix"
+    stdin: |
+      var="prepre-abc-sufsuf"
+
+      # Smallest suffix
+      shopt -u nocasematch
+      echo "\${var%}:    ${var%}"
+      echo "\${var%pre}: ${var%pre}"
+      echo "\${var%suf}: ${var%suf}"
+      echo "\${var%SUF}: ${var%SUF}"
+      shopt -s nocasematch
+      echo "\${var%SUF}(nocasematch): ${var%SUF}"
+
+      # Largest suffix
+      shopt -u nocasematch
+      echo "\${var%%}:    ${var%%}"
+      echo "\${var%%pre}: ${var%%pre}"
+      echo "\${var%%suf}: ${var%%suf}"
+      echo "\${var%%SUF}: ${var%%SUF}"
+      shopt -s nocasematch
+      echo "\${var%%SUF}(nocasematch): ${var%%SUF}"
+
+      # Smallest prefix
+      shopt -u nocasematch
+      echo "\${var#}:     ${var#}"
+      echo "\${var#pre}:  ${var#pre}"
+      echo "\${var#suf}:  ${var#suf}"
+      echo "\${var#PRE}:  ${var#PRE}"
+      shopt -s nocasematch
+      echo "\${var#PRE}(nocasematch):  ${var#PRE}"
+
+      # Largest prefix
+      shopt -u nocasematch
+      echo "\${var##}:    ${var##}"
+      echo "\${var##pre}: ${var##pre}"
+      echo "\${var##suf}: ${var##suf}"
+      echo "\${var##PRE}: ${var##PRE}"
+      shopt -s nocasematch
+      echo "\${var##PRE}(nocasematch): ${var##PRE}"
+
+  - name: "Indirect variable references"
+    stdin: |
+      var="Hello"
+      ref="var"
+      echo "${!ref}"
+      echo "${!ref//l/o}"
+
+  - name: "Indirect variable references with special parameters"
+    stdin: |
+      set a b c
+
+      ref="2"
+      echo "${!ref}"
+
+  - name: "Indirect variable references with array"
+    stdin: |
+      arr=("element1" "element2" "element3")
+
+      ref="arr[1]"
+      echo "${!ref}"
+
+      ref="arr[10]"
+      echo "${!ref}"
+
+  - name: "Variable prefix match"
+    stdin: |
+      var1="Hello"
+      var2="World"
+
+      echo "${!var*}"
+      echo "${!var@}"
+
+      echo "Dumping *"
+      for i in "${!var*}"; do
+          echo "i: $i"
+      done
+
+      echo "Dumping @"
+      for i in "${!var@}"; do
+          echo "i: $i"
+      done
+
+  - name: "Uppercase first character"
+    stdin: |
+      var="hello"
+
+      shopt -u nocasematch
+      echo "\${var^}:   ${var^}"
+      echo "\${var^h}:  ${var^h}"
+      echo "\${var^H}:  ${var^H}"
+      echo "\${var^l}:  ${var^l}"
+      echo "\${var^h*}: ${var^h*}"
+      echo "\${var^he}: ${var^he}"
+      echo "\${var^?}:  ${var^?}"
+      echo "\${var^*}:  ${var^*}"
+
+      shopt -s nocasematch
+      echo "\${var^H}(nocasematch): ${var^H}"
+
+      arr=("hello" "world")
+      echo "\${arr^}: ${arr^}"
+      echo "\${arr[@]^}: ${arr[@]^}"
+      echo "\${arr[*]^}: ${arr[*]^}"
+
+  - name: "Uppercase matching pattern"
+    stdin: |
+      var="hello"
+
+      shopt -u nocasematch
+      echo "\${var^^}:  ${var^^}"
+      echo "\${var^^l}: ${var^^l}"
+      echo "\${var^^L}: ${var^^L}"
+      echo "\${var^^m}: ${var^^m}"
+
+      shopt -s nocasematch
+      echo "\${var^^L}(nocasematch): ${var^^L}"
+
+      arr=("hello" "world")
+      echo "\${arr^^}: ${arr^^}"
+      echo "\${arr[@]^^}: ${arr[@]^^}"
+      echo "\${arr[*]^^}: ${arr[*]^^}"
+
+  - name: "Lowercase first character"
+    stdin: |
+      var="HELLO"
+
+      shopt -u nocasematch
+      echo "\${var,}:   ${var,}"
+      echo "\${var,h}:  ${var,h}"
+      echo "\${var,H}:  ${var,H}"
+      echo "\${var,L}:  ${var,L}"
+      echo "\${var,H*}: ${var,H*}"
+      echo "\${var,HE}: ${var,HE}"
+      echo "\${var,?}:  ${var,?}"
+      echo "\${var,*}:  ${var,*}"
+
+      shopt -s nocasematch
+      echo "\${var,h}(nocasematch):  ${var,h}"
+
+      arr=("HELLO" "WORLD")
+      echo "\${arr,}: ${arr,}"
+      echo "\${arr[@],}: ${arr[@],}"
+      echo "\${arr[*],}: ${arr[*],}"
+
+  - name: "Lowercase matching pattern"
+    stdin: |
+      var="HELLO"
+
+      shopt -u nocasematch
+      echo "\${var,,}:  ${var,,}"
+      echo "\${var,,M}: ${var,,M}"
+      echo "\${var,,L}: ${var,,L}"
+      echo "\${var,,l}: ${var,,l}"
+
+      shopt -s nocasematch
+      echo "\${var,,l}(nocasematch): ${var,,l}"
+
+      arr=("HELLO" "WORLD")
+      echo "\${arr,,}: ${arr,,}"
+      echo "\${arr[@],,}: ${arr[@],,}"
+      echo "\${arr[*],,}: ${arr[*],,}"
+
+  - name: "Substring replacement"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var/world/WORLD}: ${var/world/WORLD}"
+
+      arr=("world" "world")
+      echo "\${arr/world/WORLD}: ${arr/world/WORLD}"
+      echo "\${arr[@]/world/WORLD}: ${arr[@]/world/WORLD}"
+      echo "\${arr[*]/world/WORLD}: ${arr[*]/world/WORLD}"
+
+  - name: "Substring replacement with slashes"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var/world//world}: ${var/world//world}"
+
+  - name: "Substring replacement with patterns"
+    stdin: |
+      var="a[bc]d"
+      pattern="[bc]"
+      echo "Replacement 1: ${var/${pattern}/}"
+      echo "Replacement 2: ${var/"${pattern}"/}"
+
+  - name: "Prefix substring replacement"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var/#world/WORLD}: ${var/#world/WORLD}"
+      echo "\${var/#Hello/HELLO}: ${var/#Hello/HELLO}"
+
+      arr=("world" "world")
+      echo "\${arr/#world/WORLD}: ${arr/#world/WORLD}"
+      echo "\${arr[@]/#world/WORLD}: ${arr[@]/#world/WORLD}"
+      echo "\${arr[*]/#world/WORLD}: ${arr[*]/#world/WORLD}"
+
+  - name: "Suffix substring replacement"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var/%Hello/HELLO}:   ${var/%Hello/HELLO}"
+      echo "\${var/%world!/WORLD!}: ${var/%world!/WORLD!}"
+
+      arr=("world" "world")
+      echo "\${arr/%world/WORLD}: ${arr/%world/WORLD}"
+      echo "\${arr[@]/%world/WORLD}: ${arr[@]/%world/WORLD}"
+      echo "\${arr[*]/%world/WORLD}: ${arr[*]/%world/WORLD}"
+
+  - name: "Global substring replacement"
+    stdin: |
+      var="Hello, world, world!"
+      echo "\${var//world/WORLD}: ${var//world/WORLD}"
+
+      arr=("world world" "world world")
+      echo "\${arr//world/WORLD}: ${arr//world/WORLD}"
+      echo "\${arr[@]//world/WORLD}: ${arr[@]//world/WORLD}"
+      echo "\${arr[*]//world/WORLD}: ${arr[*]//world/WORLD}"
+
+  - name: "Global substring removal"
+    stdin: |
+      var="That is not all"
+
+      shopt -u nocasematch
+      echo "\${var//not }: ${var//not}"
+
+      shopt -s nocasematch
+      echo "\${var//NOT }: ${var//NOT }"
+
+  - name: "Substring from offset"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var:0}:   ${var:0}"
+      echo "\${var:7}:   ${var:7}"
+      echo "\${var: 7 }: ${var: 7 }"
+      echo "\${var:50}:  ${var:50}"
+      echo "\${var:-1}:  ${var:-1}"
+      echo "\${var: -1}: ${var: -1}"
+      echo "\${var: 2 + 3 }: ${var: 2 + 3 }"
+
+  - name: "Substring with length"
+    stdin: |
+      var="Hello, world!"
+      echo "\${var:0:1}:  ${var:0:1}"
+      echo "\${var:0:0}:  ${var:0:0}"
+      echo "\${var:0:50}: ${var:0:50}"
+      echo "\${var:0:-1}: ${var:0:-1}"
+      echo "\${var:0:-3}: ${var:0:-3}"
+      echo "\${var:7:3}:  ${var:7:3}"
+      echo "\${var:50:2}: ${var:50:2}"
+      echo "\${var:-1:1}: ${var:-1:1}"
+      echo "\${var:-3:1}: ${var:-3:1}"
+
+  - name: "Substring with negative length"
+    stdin: |
+      var="abcdefgh"
+      echo "\${var:2:-2}:    ${var:2:-2}"
+      echo "\${var:0:-1}:    ${var:0:-1}"
+      echo "\${var:0:-8}:   [${var:0:-8}]"
+      echo "\${var: -4:-1}: ${var: -4:-1}"
+      echo "\${var: -4:-4}:[${var: -4:-4}]"
+      echo "\${var:2:-6}:   [${var:2:-6}]"
+      echo "\${var:9:-1}:   [${var:9:-1}]"
+      n=2
+      echo "\${var:1:-n}:    ${var:1:-n}"
+      echo "\${var:1:(-2)}:  ${var:1:(-2)}"
+      elem=(abcdefgh)
+      echo "\${elem[0]:2:-2}:  ${elem[0]:2:-2}"
+
+  - name: "Substring with a negative length reaching past the offset"
+    ignore_stderr: true
+    stdin: |
+      var="abcdefgh"
+      ( echo "[${var:0:-9}]" ); echo "rc=$?"
+      ( echo "[${var:2:-7}]" ); echo "rc=$?"
+      ( echo "[${var:8:-1}]" ); echo "rc=$?"
+      empty=
+      ( echo "[${empty:0:-1}]" ); echo "rc=$?"
+
+  - name: "Substring with negative length past the end of an array"
+    stdin: |
+      arr=(a b c)
+      echo "\${arr[@]:3:-1}: [${arr[@]:3:-1}]"
+      echo "\${arr[@]:9:-1}: [${arr[@]:9:-1}]"
+      echo "\${arr[*]:9:-1}: [${arr[*]:9:-1}]"
+      set -- p q r
+      echo "\${@:5:-1}:      [${@:5:-1}]"
+
+  - name: "Substring with negative length on arrays"
+    # bash rejects a negative length for every array form. The offset at which it stops
+    # doing so and yields an empty slice instead is not the same one it uses for strings,
+    # and differs between indexed arrays (past the highest subscript) and the forms
+    # addressed by position (past the element count). The associative cases only pin that
+    # the length is still rejected: bash documents substring expansion of an associative
+    # array as producing undefined results, so its selection is not something to match.
+    ignore_stderr: true
+    stdin: |
+      arr=(a b c)
+      ( echo "[${arr[@]:0:-1}]" ); echo "rc=$?"
+      ( echo "[${arr[@]:2:-1}]" ); echo "rc=$?"
+      ( echo "[${arr[@]:3:-1}]" ); echo "rc=$?"
+      ( echo "[${arr[*]:0:-1}]" ); echo "rc=$?"
+      ( echo "[${arr[@]: -1:-1}]" ); echo "rc=$?"
+      set -- p q r
+      ( echo "[${@:1:-1}]" ); echo "rc=$?"
+      ( echo "[${@:4:-1}]" ); echo "rc=$?"
+      ( echo "[${@:5:-1}]" ); echo "rc=$?"
+      ( echo "[${*:3:-1}]" ); echo "rc=$?"
+      declare -A assoc=([x]=1)
+      ( echo "[${assoc[@]:0:-1}]" ); echo "rc=$?"
+      ( echo "[${assoc[@]:1:-1}]" ); echo "rc=$?"
+      ( echo "[${assoc[@]:2:-1}]" ); echo "rc=$?"
+
+  - name: "Substring with an out-of-range offset"
+    stdin: |
+      var="abcdefgh"
+      echo "\${var:99:-1}:      [${var:99:-1}]"
+      echo "\${var: -99:-1}:    [${var: -99:-1}]"
+      echo "\${var: -99:2}:     [${var: -99:2}]"
+      echo "\${var:99:2}:       [${var:99:2}]"
+      unset nosuch
+      echo "\${nosuch:0:-1}:    [${nosuch:0:-1}]"
+      echo "\${nosuch: -1:-1}:  [${nosuch: -1:-1}]"
+      arr=(a b c)
+      echo "\${arr[@]:99:-1}:   [${arr[@]:99:-1}]"
+      echo "\${arr[@]: -99:-1}: [${arr[@]: -99:-1}]"
+      empty_arr=()
+      echo "\${empty_arr[@]:0:-1}:   [${empty_arr[@]:0:-1}]"
+      declare -A empty_assoc=()
+      echo "\${empty_assoc[@]:0:-1}: [${empty_assoc[@]:0:-1}]"
+
+  - name: "Substring operator on a scalar referenced as an array"
+    ignore_stderr: true
+    stdin: |
+      s=hello
+      echo "\${s[@]:0:2}:  ${s[@]:0:2}"
+      echo "\${s[@]:1:2}:  ${s[@]:1:2}"
+      echo "\${s[@]:1}:    ${s[@]:1}"
+      echo "\${s[@]:0:-1}: ${s[@]:0:-1}"
+      echo "\${s[*]:1:-1}: ${s[*]:1:-1}"
+      echo "\${#s[@]}:     ${#s[@]}"
+      ( echo "[${s[@]:2:-9}]" ); echo "rc=$?"
+
+  - name: "Substring operator on a dynamic scalar referenced as an array"
+    # LINENO stands in for the dynamic scalars (RANDOM, EPOCHSECONDS, ...) because it's
+    # the deterministic one. The `:` padding keeps it at two digits so the slices below
+    # can tell string addressing apart from element addressing.
+    stdin: |
+      :
+      :
+      :
+      :
+      :
+      :
+      :
+      :
+      :
+      echo "\${LINENO[@]:1}:    ${LINENO[@]:1}"
+      echo "\${LINENO[@]:0:1}:  ${LINENO[@]:0:1}"
+      echo "\${#LINENO[@]}:     ${#LINENO[@]}"
+      ( echo "[${LINENO[@]:0:-1}]" ); echo "rc=$?"
+
+  - name: "Substring on string with multi-byte chars"
+    skip: true # TODO(expansion): succeeds on macOS, fails on Linux
+    stdin: |
+      var="7❌🖌️✅😂🔴⛔ABC"
+      echo "${var:2}" | hexdump -C
+
+  - name: "Substring operator on arrays"
+    stdin: |
+      set abcde fghij klmno pqrst uvwxy z
+      echo "\${@:2:2}: ${@:2:2}"
+      echo "\${@:2}: ${@:2}"
+
+      myarray=(abcde fghij klmno pqrst uvwxy z)
+      echo "\${myarray[@]:2:2}: ${myarray[@]:2:2}"
+      echo "\${myarray[@]:2}: ${myarray[@]:2}"
+
+  - name: "Substring operator on arrays with negative index"
+    stdin: |
+      set abcde fghij klmno pqrst uvwxy z
+      echo "\${@: -2:2}: ${@: -2:2}"
+      echo "\${@: -2}: ${@: -2}"
+
+      myarray=(abcde fghij klmno pqrst uvwxy z)
+      echo "\${myarray[@]: -2:2}: ${myarray[@]: -2:2}"
+      echo "\${myarray[@]: -2}: ${myarray[@]: -2}"
+
+  - name: "Substring operator on single-element array"
+    stdin: |
+      myarray=("abcde fghij klmno pqrst uvwxy z")
+      echo "\${myarray[@]:0:1}: ${myarray[@]:0:1}"
+      echo "\${myarray[@]:1}: ${myarray[@]:1}"
+
+  - name: "Substring operator past end of array"
+    stdin: |
+      set a b c
+      declare -a result1=("${@:3}")
+      declare -p result1
+
+      myarray=(a b c)
+      declare -a result2=("${myarray[@]:3}")
+      declare -p result2
+
+  - name: "Substring operator on arrays with out-of-range offsets and lengths"
+    stdin: |
+      arr=(a b c d e)
+      echo "\${arr[@]:1:99}:    ${arr[@]:1:99}"
+      echo "\${arr[@]:0:0}:    [${arr[@]:0:0}]"
+      echo "\${arr[@]: -2:99}:  ${arr[@]: -2:99}"
+      echo "\${arr[@]: -9:2}:  [${arr[@]: -9:2}]"
+      echo "\${arr[@]:4:1}:     ${arr[@]:4:1}"
+      echo "\${arr[@]:5:1}:    [${arr[@]:5:1}]"
+      echo "\${arr[*]:1:2}:     ${arr[*]:1:2}"
+      echo "\${arr[*]: -2:99}:  ${arr[*]: -2:99}"
+      set -- p q r
+      echo "\${@:1:99}:         ${@:1:99}"
+      echo "\${@: -1:99}:       ${@: -1:99}"
+
+  - name: "Substring operator on sparse indexed arrays"
+    stdin: |
+      sparse=([1]=one [5]=five [9]=nine)
+      echo "\${sparse[@]:0}:     ${sparse[@]:0}"
+      echo "\${sparse[@]:1}:     ${sparse[@]:1}"
+      echo "\${sparse[@]:2}:     ${sparse[@]:2}"
+      echo "\${sparse[@]:6}:     ${sparse[@]:6}"
+      echo "\${sparse[@]:9}:     ${sparse[@]:9}"
+      echo "\${sparse[@]:10}:   [${sparse[@]:10}]"
+      echo "\${sparse[@]:1:1}:   ${sparse[@]:1:1}"
+      echo "\${sparse[@]:1:2}:   ${sparse[@]:1:2}"
+      echo "\${sparse[@]:5:0}:  [${sparse[@]:5:0}]"
+      echo "\${sparse[@]:2:99}:  ${sparse[@]:2:99}"
+      echo "\${sparse[@]: -1}:    ${sparse[@]: -1}"
+      echo "\${sparse[@]: -5}:    ${sparse[@]: -5}"
+      echo "\${sparse[@]: -10}:   ${sparse[@]: -10}"
+      echo "\${sparse[@]: -11}:  [${sparse[@]: -11}]"
+      echo "\${sparse[*]:2}:     ${sparse[*]:2}"
+      echo "\${sparse[*]:1:2}:   ${sparse[*]:1:2}"
+      echo "\${sparse[*]: -5}:    ${sparse[*]: -5}"
+      echo "\${sparse[*]: -11}:  [${sparse[*]: -11}]"
+      declare -a solo; solo[7]=x
+      echo "\${solo[@]:0}:       ${solo[@]:0}"
+      echo "\${solo[@]:7}:       ${solo[@]:7}"
+      echo "\${solo[@]:8}:      [${solo[@]:8}]"
+
+  - name: "Substring with negative length on a sparse indexed array"
+    ignore_stderr: true
+    stdin: |
+      sparse=([1]=one [5]=five [9]=nine)
+      ( echo "[${sparse[@]:0:-1}]" ); echo "rc=$?"
+      ( echo "[${sparse[@]:5:-1}]" ); echo "rc=$?"
+      ( echo "[${sparse[@]:9:-1}]" ); echo "rc=$?"
+      ( echo "[${sparse[@]:10:-1}]" ); echo "rc=$?"
+      ( echo "[${sparse[@]:11:-1}]" ); echo "rc=$?"
+
+  - name: "Substring with length (with nested expressions)"
+    stdin: |
+      var="Hello, world!"
+      offset=7
+      length=5
+      echo "\${var:\$offset:\${length}}: ${var:$offset:${length}}"
+
+  - name: "String length counts characters, not bytes"
+    # brush counts UTF-8 bytes. Under the suite's default LC_ALL=C bash agrees, so
+    # the oracle needs a UTF-8 locale for the difference to show at all.
+    known_failure: true
+    env:
+      LC_ALL: "C.UTF-8"
+    stdin: |
+      var="héllo"
+      echo "${#var}"
+      var="테스트"
+      echo "${#var}"
+
+  - name: "Extglob-like text in parameter expansion default"
+    stdin: |
+      shopt -s extglob
+      echo ${u:-a@(}
+
+  - name: "Doubled dollar sign before brace"
+    stdin: |
+      echo $${u | sed "s/$$/PID/g"
+      echo "rc=$?"
+
+  - name: "Doubled dollar sign before parenthesis"
+    ignore_stderr: true
+    stdin: |
+      echo $$(echo hi)
+
+  - name: "ANSI-C quoting in parameter expansion in double quotes"
+    known_failure: true # TODO(expansion): with extquote (on by default), $'...' inside "${...}" is decoded; brush keeps it as is
+    stdin: |
+      echo "[${x:-$'a\tb'}]"
+
+  - name: "Escaped closing brace in parameter expansion in double quotes"
+    known_failure: true # TODO(expansion): bash removes the backslash from '\}' inside "${...}"; brush keeps it
+    stdin: |
+      echo "[${x:-\}}]"
+
+  - name: "Tabs in parameter expansion default"
+    stdin: |
+      echo "[${x:-a	b}]" "[${x:-a 	 b}]"
+
+  - name: "Here-doc operator as parameter expansion default"
+    stdin: |
+      echo ${u:-<<} ${u:-<<-}
+      echo "${u:-<<}" "${u:-<<-}"
+
+  - name: "Bad substitution in braced parameter expansion"
+    known_failure: true # TODO(expansion): #540: a malformed '${...}' is silently treated as literal text
+    ignore_stderr: true # error wording differs
+    stdin: |
+      echo before
+      echo ${x!}
+      echo "rc=$?"
+      x="a ${y!} b"
+      echo "rc=$? x=$x"
+
+  - name: "Braced last background process ID"
+    known_failure: true # TODO(expansion): '${!}' (not followed by a name) is taken as indirection, so it doesn't parse
+    stdin: |
+      echo "[${!:-none}]"
+      true &
+      wait
+      [ "${!}" = "$!" ] && echo same
+      echo "[${!:+set}]"
+      b=x x=y
+      echo "${!b}"
+
+  - name: "Case-toggling parameter expansion"
+    known_failure: true # TODO(expansion): ${x~} and ${x~~} (undocumented in bash) are not implemented
+    stdin: |
+      x=aBc
+      echo "${x~}" "${x~~}"
+
+  - name: "An escaped dollar sign in a pattern substitution's replacement is literal"
+    stdin: |
+      x=abc y=Y
+      echo "1 ${x/b/\$0}"
+      echo "2 ${x/b/\$1}"
+      echo "3 ${x/b/\$y}"
+      echo 4 ${x/b/\$0}
+      echo "5 ${x//[ac]/\$1}" "${x/#a/\$1}" "${x/%c/\$1}"
+      echo "6 ${x/b/\$\$}" "${x/b/\${y}}"
+      set -- P
+      echo "7 ${x/b/\\\$1}" ${x/b/\\\$1}
+
+  - name: "A dollar sign the replacement's expansion yields is literal"
+    stdin: |
+      x=abc
+      r='$1'
+      echo "1 ${x/b/$r}" ${x/b/$r}
+      r='\$1'
+      echo "2 ${x/b/$r}" ${x/b/$r}
+      echo "3 ${x/b/$(echo '$0')}"
+      echo "4 ${x/b/'$1'}" ${x/b/"\$1"}
+      shopt -s extglob
+      echo "5 ${x/@(b)/\$1}" "${x//@(b|c)/[\$1]}"
+      arr=(ab cb)
+      echo "6 ${arr[@]/b/\$1}"
+      set -- ab cb
+      echo "7 ${@/b/\$1}"
+
+  - name: "Expansions in a pattern substitution's replacement are performed"
+    stdin: |
+      x=abc y=Y
+      set -- P
+      echo "1 ${x/b/$1}" ${x/b/$1} "${x/b/$y}" "${x/b/${y}}"
+      echo "2 ${x/b/$(echo C)}" "${x/b/`echo B`}" "${x/b/$((1+2))}"
+      echo "3 ${x/b/\\$1}" ${x/b/\\$1}
+      echo "4 ${x//[ac]/$1}" "${x/#a/$1}" "${x/%c/$1}"
+      echo "5 ${x/b/$}" "${x/b/\$}" "${x/b/\q}" "${x/b/\\q}"
+
+  - name: "An escaped or quoted ampersand in a pattern substitution's replacement is literal"
+    stdin: |
+      x=abc
+      echo "1 ${x/b/<\&>}" ${x/b/<\&>}
+      echo "2 ${x/b/'&'}" ${x/b/"&"} "${x/b/"&"}"
+      echo "3 ${x/b/\\\&}" ${x/b/\\\&} "${x/b/$'\\&'}"
+      shopt -u patsub_replacement
+      echo "4 ${x/b/<&>}" ${x/b/<&>} "${x/b/<\&>}"
+      r='\\'
+      echo "5 ${x/b/$r}"
+
+  - name: "An ampersand in a pattern substitution's replacement stands for the match"
+    known_failure: true # TODO(expansion): patsub_replacement is not implemented
+    stdin: |
+      x=abc
+      echo "1 ${x/b/<&>}" ${x/b/<&>}
+      echo "2 ${x/b/&&}" "${x//?/<&>}"
+      echo "3 ${x/b/<\\&>}" ${x/b/<\\&>}
+      r='&'
+      echo "4 ${x/b/$r}" ${x/b/$r} "${x/b/$(echo '&')}"
+      echo "5 ${x/b/x\$1&}"
+
+  - name: "A backslash an unquoted replacement expansion yields escapes an ampersand or backslash"
+    known_failure: true # TODO(expansion): patsub_replacement is not implemented
+    stdin: |
+      x=abc
+      r='\&'
+      echo "1 ${x/b/$r}" ${x/b/$r}
+      r='\\'
+      echo "2 ${x/b/$r}" ${x/b/$r}

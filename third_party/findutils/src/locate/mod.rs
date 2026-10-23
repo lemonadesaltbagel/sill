@@ -1,0 +1,814 @@
+// Use of this source code is governed by a MIT-style
+// license that can be found in the LICENSE file or at
+// https://opensource.org/licenses/MIT.
+
+use std::{
+    borrow::Cow,
+    env,
+    ffi::{CStr, CString},
+    fs::{self, File},
+    io::{self, stderr, BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
+use chrono::{DateTime, Local, TimeDelta};
+use clap::{self, crate_version, value_parser, Arg, ArgAction, ArgMatches, Command, Id};
+use itertools::Itertools;
+use onig::{Regex, RegexOptions, Syntax};
+use thiserror::Error;
+use uucore::error::{ClapErrorWrapper, UClapError, UError, UResult};
+
+use crate::{find::matchers::RegexType, updatedb::DbFormat};
+
+#[derive(Debug)]
+pub struct Config {
+    all: bool,
+    basename: bool,
+    mode: Mode,
+    db: Vec<PathBuf>,
+    existing: ExistenceMode,
+    follow_symlinks: bool,
+    ignore_case: bool,
+    limit: Option<usize>,
+    max_age: usize,
+    null_bytes: bool,
+    print: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Normal,
+    Count,
+    Statistics,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ExistenceMode {
+    #[default]
+    Any,
+    Present,
+    NotPresent,
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("no matches found")]
+    NoMatches,
+    #[error("Unknown database type")]
+    InvalidDbType,
+    #[error("locate database {0} is corrupt or invalid")]
+    InvalidDb(String),
+    #[error("invalid regular expression: {0}")]
+    InvalidRegex(String),
+    #[error("{0}")]
+    IoErr(#[from] io::Error),
+    #[error("{0}")]
+    ClapErr(#[from] ClapErrorWrapper),
+    /// General copy error
+    #[error("{0}")]
+    Error(String),
+}
+
+type LocateResult<T> = Result<T, Error>;
+
+impl UError for Error {
+    fn code(&self) -> i32 {
+        1
+    }
+}
+
+pub struct Statistics {
+    matches: usize,
+    total_length: usize,
+    whitespace: usize,
+    newlines: usize,
+    high_bit: usize,
+}
+
+impl Statistics {
+    fn new() -> Self {
+        Self {
+            matches: 0,
+            total_length: 0,
+            whitespace: 0,
+            newlines: 0,
+            high_bit: 0,
+        }
+    }
+
+    fn add_match(&mut self, mat: &CStr) {
+        let s = mat.to_string_lossy();
+        self.matches += 1;
+        self.total_length += s.len();
+        if s.chars().any(char::is_whitespace) {
+            self.whitespace += 1;
+        }
+        if s.chars().any(|c| c == '\n') {
+            self.newlines += 1;
+        }
+        if !s.is_ascii() {
+            self.high_bit += 1;
+        }
+    }
+
+    fn print_header<W: Write>(&self, out: &mut W, dbreader: &DbReader) -> io::Result<()> {
+        writeln!(
+            out,
+            "Database {} is in the {} format.",
+            dbreader.path.to_string_lossy(),
+            dbreader.format,
+        )
+    }
+
+    fn print<W: Write>(&self, out: &mut W, dbreader: &DbReader) -> io::Result<()> {
+        if let Ok(metadata) = fs::metadata(&dbreader.path) {
+            if let Ok(time) = metadata.modified() {
+                let time: DateTime<Local> = time.into();
+                writeln!(out, "Database was last modified at {}", time)?;
+            }
+            writeln!(out, "Locate database size: {} bytes", metadata.len())?;
+        }
+        writeln!(out, "Matching Filenames: {}", self.matches)?;
+        writeln!(
+            out,
+            "File names have a cumulative length of {} bytes",
+            self.total_length
+        )?;
+        writeln!(out, "Of those file names,\n")?;
+        writeln!(out, "        {} contain whitespace,", self.whitespace)?;
+        writeln!(out, "        {} contain newline characters,", self.newlines)?;
+        writeln!(
+            out,
+            "        and {} contain characters with the high bit set.",
+            self.high_bit
+        )?;
+        writeln!(out)
+    }
+}
+
+#[derive(Debug)]
+enum Patterns {
+    String(Vec<String>),
+    Regex(Vec<Regex>),
+}
+
+impl Patterns {
+    fn any_match(&self, entry: &str) -> bool {
+        match self {
+            Self::String(v) => v.iter().any(|s| entry.contains(s)),
+            Self::Regex(v) => v.iter().any(|r| r.find(entry).is_some()),
+        }
+    }
+
+    fn all_match(&self, entry: &str) -> bool {
+        match self {
+            Self::String(v) => v.iter().all(|s| entry.contains(s)),
+            Self::Regex(v) => v.iter().all(|r| r.find(entry).is_some()),
+        }
+    }
+}
+
+pub struct ParsedInfo {
+    patterns: Patterns,
+    config: Config,
+}
+
+fn make_regex(ty: RegexType, config: &Config, pattern: &str) -> Result<Regex, onig::Error> {
+    let syntax = match ty {
+        RegexType::Emacs => Syntax::emacs(),
+        RegexType::Grep => Syntax::grep(),
+        RegexType::PosixBasic => Syntax::posix_basic(),
+        RegexType::PosixExtended => Syntax::posix_extended(),
+    };
+
+    Regex::with_options(
+        pattern,
+        if config.ignore_case {
+            RegexOptions::REGEX_OPTION_IGNORECASE
+        } else {
+            RegexOptions::REGEX_OPTION_NONE
+        },
+        syntax,
+    )
+}
+
+impl TryFrom<ArgMatches> for ParsedInfo {
+    type Error = Error;
+
+    fn try_from(value: ArgMatches) -> Result<Self, Self::Error> {
+        let config = Config {
+            all: value.get_flag("all"),
+            basename: value.get_flag("basename"),
+            db: value
+                .get_one::<String>("database")
+                .map(String::as_str)
+                // `database` has a default value, so this is only reached if clap
+                // somehow omits it; fall back to an empty (non-openable) path.
+                .unwrap_or_default()
+                .split(':')
+                .map(PathBuf::from)
+                .collect(),
+            mode: value
+                .get_many::<Id>("mode")
+                .unwrap_or_default()
+                .next_back()
+                .map(|s| match s.as_str() {
+                    "count" => Mode::Count,
+                    "statistics" => Mode::Statistics,
+                    // the "mode" group only contains the "count" and "statistics" args
+                    _ => unreachable!(),
+                })
+                .unwrap_or_default(),
+            existing: value
+                .get_many::<Id>("exist")
+                .unwrap_or_default()
+                .next_back()
+                .map(|s| match s.as_str() {
+                    "existing" => ExistenceMode::Present,
+                    "non-existing" => ExistenceMode::NotPresent,
+                    // the "exist" group only contains the "existing" and "non-existing" args
+                    s => unreachable!("{s}"),
+                })
+                .unwrap_or_default(),
+            follow_symlinks: value.get_flag("follow") || !value.get_flag("nofollow"),
+            ignore_case: value.get_flag("ignore-case"),
+            limit: value.get_one::<usize>("limit").copied(),
+            // `max-database-age` has a default value of 8
+            max_age: value
+                .get_one::<usize>("max-database-age")
+                .copied()
+                .unwrap_or(8),
+            null_bytes: value.get_flag("null"),
+            print: value.get_flag("print"),
+        };
+        // `patterns` is a required argument, so this is normally non-empty
+        let patterns: Vec<String> = value
+            .get_many::<String>("patterns")
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default();
+        let patterns = if let Some(ty) = value.get_flag("regex").then(|| {
+            value
+                .get_one::<String>("regextype")
+                .and_then(|s| RegexType::from_str(s.as_str()).ok())
+                .unwrap_or(RegexType::Emacs)
+        }) {
+            let mut compiled = Vec::with_capacity(patterns.len());
+            for pattern in patterns {
+                let regex = make_regex(ty, &config, &pattern)
+                    .map_err(|e| Error::InvalidRegex(format!("{pattern}: {e}")))?;
+                compiled.push(regex);
+            }
+            Patterns::Regex(compiled)
+        } else {
+            Patterns::String(patterns)
+        };
+        Ok(Self { patterns, config })
+    }
+}
+
+fn uu_app() -> Command {
+    Command::new("locate")
+        .version(crate_version!())
+        .args_override_self(true)
+        .arg(
+            Arg::new("all")
+                .short('a')
+                .long("all")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("basename")
+                .short('b')
+                .long("basename")
+                .action(ArgAction::SetTrue)
+                .group("name"),
+        )
+        .arg(
+            Arg::new("count")
+                .short('c')
+                .long("count")
+                .action(ArgAction::SetTrue)
+                .group("mode"),
+        )
+        .arg(
+            Arg::new("database")
+                .short('d')
+                .long("database")
+                .env("LOCATE_PATH")
+                .default_value("/usr/local/var/locatedb")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("existing")
+                .short('e')
+                .long("existing")
+                .action(ArgAction::SetTrue)
+                .group("exist"),
+        )
+        .arg(
+            Arg::new("non-existing")
+                .short('E')
+                .long("non-existing")
+                .action(ArgAction::SetTrue)
+                .group("exist"),
+        )
+        .arg(
+            Arg::new("follow")
+                .short('L')
+                .action(ArgAction::SetTrue)
+                .overrides_with("nofollow"),
+        )
+        .arg(
+            Arg::new("nofollow")
+                .short('P')
+                .short_alias('H')
+                .action(ArgAction::SetTrue)
+                .overrides_with("follow"),
+        )
+        .arg(
+            Arg::new("ignore-case")
+                .short('i')
+                .long("ignore-case")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("limit")
+                .short('l')
+                .long("limit")
+                .value_parser(value_parser!(usize))
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("max-database-age")
+                .long("max-database-age")
+                .value_parser(value_parser!(usize))
+                .default_value("8")
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("mmap")
+                .short('m')
+                .long("mmap")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("null")
+                .short('0')
+                .long("null")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("print")
+                .short('p')
+                .long("print")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("wholename")
+                .short('w')
+                .long("wholename")
+                .action(ArgAction::SetFalse)
+                .group("name"),
+        )
+        .arg(
+            Arg::new("regex")
+                .short('r')
+                .long("regex")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("regextype")
+                .long("regextype")
+                .value_parser([
+                    "findutils-default",
+                    "emacs",
+                    "gnu-awk",
+                    "grep",
+                    "posix-awk",
+                    "awk",
+                    "posix-basic",
+                    "posix-egrep",
+                    "egrep",
+                    "posix-extended",
+                ])
+                .action(ArgAction::Set),
+        )
+        .arg(
+            Arg::new("stdio")
+                .short('s')
+                .long("stdio")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("statistics")
+                .short('S')
+                .long("statistics")
+                .action(ArgAction::SetTrue)
+                .group("mode"),
+        )
+        .arg(
+            Arg::new("patterns")
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .value_parser(value_parser!(String))
+                .required(true),
+        )
+}
+
+struct DbReader {
+    reader: BufReader<File>,
+    prev: Option<CString>,
+    prefix: isize,
+    format: DbFormat,
+    path: PathBuf,
+}
+
+impl Iterator for DbReader {
+    type Item = LocateResult<CString>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // 1 byte for the prefix delta
+        let mut buf = [0];
+        self.reader.read_exact(&mut buf).ok()?;
+        // 0x80 - the prefix delta takes the next two bytes
+        let size = if buf[0] == 0x80 {
+            let mut buf = [0; 2];
+            self.reader.read_exact(&mut buf).ok()?;
+            i16::from_be_bytes(buf) as isize
+        } else {
+            // u8 as isize directly doesn't sign-extend
+            buf[0] as i8 as isize
+        };
+        self.prefix += size;
+        // read the actual path fragment
+        let mut buf = Vec::new();
+        self.reader.read_until(b'\0', &mut buf).ok()?;
+        let prefix = self.prev.as_ref().map(|s| {
+            s.to_bytes()
+                .iter()
+                .take(self.prefix as usize)
+                .collect::<Vec<_>>()
+        });
+        if (prefix.as_ref().map_or(0, std::vec::Vec::len) as isize) < size {
+            return Some(Err(Error::InvalidDb(
+                self.path.to_string_lossy().to_string(),
+            )));
+        }
+        let res = CString::from_vec_with_nul(
+            prefix
+                .unwrap_or_default()
+                .into_iter()
+                .copied()
+                .chain(buf)
+                .collect(),
+        )
+        .ok()?;
+        self.prev = Some(res.clone());
+        Some(Ok(res))
+    }
+}
+
+impl DbReader {
+    fn new(path: impl AsRef<Path>) -> UResult<Self> {
+        let mut reader = BufReader::new(File::open(path.as_ref())?);
+        let format = Self::check_db(&mut reader).ok_or(Error::InvalidDbType)?;
+        Ok(Self {
+            reader,
+            prev: None,
+            prefix: 0,
+            format,
+            path: path.as_ref().to_path_buf(),
+        })
+    }
+
+    fn check_db(reader: &mut BufReader<File>) -> Option<DbFormat> {
+        let mut buf = [0];
+        let Ok(_) = reader.read_exact(&mut buf) else {
+            return None;
+        };
+        let mut buf = Vec::new();
+        let Ok(_) = reader.read_until(b'\0', &mut buf) else {
+            return None;
+        };
+
+        // drop the trailing nul byte when matching. `read_until` may stop at EOF
+        // without one (e.g. a too-short file), so strip it only if present rather
+        // than slicing `buf.len() - 1`, which underflows when `buf` is empty.
+        match String::from_utf8_lossy(buf.strip_suffix(b"\0").unwrap_or(&buf)).as_ref() {
+            "LOCATE02" => Some(DbFormat::Locate02),
+            _ => None,
+        }
+    }
+}
+
+/// Decode a raw database entry into a path.
+///
+/// On Unix a path is an arbitrary byte string, so the bytes are used verbatim. On other
+/// platforms paths aren't raw bytes; the database stores UTF-8 text (find emits paths via
+/// `Path::to_string_lossy`), so it is decoded lossily back into a path.
+#[cfg(unix)]
+fn bytes_to_path(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+#[cfg(not(unix))]
+fn bytes_to_path(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Whether `path` currently exists on disk.
+///
+/// With `follow_symlinks` (the `-L`/`--follow` default) a symlink is resolved, so a broken
+/// symlink counts as non-existent. Without it (`-P`/`--nofollow`) the link itself is checked,
+/// so a broken symlink counts as existing.
+fn path_exists(path: &Path, follow_symlinks: bool) -> bool {
+    if follow_symlinks {
+        fs::metadata(path).is_ok()
+    } else {
+        fs::symlink_metadata(path).is_ok()
+    }
+}
+
+fn match_entry(entry: &CStr, config: &Config, patterns: &Patterns) -> bool {
+    // glob metacharacters in a stored path aren't handled yet, so such entries are skipped. On
+    // Windows `\` is the path separator (present in every path), so it must not count here.
+    #[cfg(windows)]
+    const GLOB_METACHARS: &str = "*?[]";
+    #[cfg(not(windows))]
+    const GLOB_METACHARS: &str = r"*?[]\";
+
+    let buf = bytes_to_path(entry.to_bytes());
+    let name = if config.basename {
+        let Some(path) = buf.file_name() else {
+            return false;
+        };
+
+        let Ok(c) = CString::from_vec_with_nul(
+            path.as_encoded_bytes()
+                .iter()
+                .copied()
+                .chain(*b"\0")
+                .collect(),
+        ) else {
+            // a file name can't contain an interior nul byte, so this only fails on
+            // genuinely malformed input, which we treat as a non-match
+            return false;
+        };
+
+        Cow::Owned(c)
+    } else {
+        Cow::Borrowed(entry)
+    };
+    let entry = name.to_string_lossy();
+
+    let has_metachars = entry.chars().any(|c| GLOB_METACHARS.contains(c));
+    let patterns_match = if config.all {
+        if has_metachars {
+            // TODO: parse metacharacters
+            false
+        } else {
+            patterns.all_match(entry.as_ref())
+        }
+    } else {
+        if has_metachars {
+            // TODO: parse metacharacters
+            false
+        } else {
+            patterns.any_match(entry.as_ref())
+        }
+    };
+
+    // existence is always checked against the full path, even in `--basename` mode
+    let existence_matches = match config.existing {
+        ExistenceMode::Any => true,
+        ExistenceMode::Present => path_exists(&buf, config.follow_symlinks),
+        ExistenceMode::NotPresent => !path_exists(&buf, config.follow_symlinks),
+    };
+
+    patterns_match && existence_matches
+}
+
+/// Whether a database of the given `age` is older than `max_age` days.
+/// A `max_age` too large for `i64`/`chrono` to represent can never be exceeded.
+fn is_db_too_old(age: TimeDelta, max_age: usize) -> bool {
+    match i64::try_from(max_age).ok().and_then(TimeDelta::try_days) {
+        Some(limit) => age > limit,
+        None => false,
+    }
+}
+
+fn do_locate(args: &[&str]) -> LocateResult<()> {
+    let matches = uu_app().try_get_matches_from(args);
+    match matches {
+        Err(e) => {
+            let mut app = uu_app();
+
+            match e.kind() {
+                clap::error::ErrorKind::DisplayHelp => {
+                    app.print_help()?;
+                }
+                clap::error::ErrorKind::DisplayVersion => {
+                    write!(io::stdout(), "{}", app.render_version())?;
+                }
+                _ => return Err(e.with_exit_code(1).into()),
+            }
+        }
+        Ok(matches) => {
+            let ParsedInfo { patterns, config } = ParsedInfo::try_from(matches)?;
+            let mut stats = Statistics::new();
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
+
+            // iterate over each given database
+            let mut count = 0;
+            for mut dbreader in config
+                .db
+                .iter()
+                .filter_map(|p| DbReader::new(p.as_path()).ok())
+            {
+                // if we can get the mtime of the file, check it against the current time
+                if let Ok(metadata) = fs::metadata(&dbreader.path) {
+                    if let Ok(time) = metadata.modified() {
+                        let modified: DateTime<Local> = time.into();
+                        let now = Local::now();
+                        let delta = now - modified;
+                        if is_db_too_old(delta, config.max_age) {
+                            eprintln!(
+                                "{}: warning: database ‘{}’ is more than {} days old (actual age is {:.1} days)",
+                                args[0],
+                                dbreader.path.to_string_lossy(),
+                                config.max_age,
+                                delta.num_seconds() as f64 / (60 * 60 * 24) as f64
+                            );
+                        }
+                    }
+                }
+
+                // the first line of the statistics description is printed before matches
+                // (given --print)
+                if config.mode == Mode::Statistics {
+                    stats.print_header(&mut out, &dbreader)?;
+                }
+
+                // find matches
+                let mut write_result = Ok(());
+                let db_count = dbreader.by_ref().process_results(|iter| {
+                    iter.filter(|s| match_entry(s.as_c_str(), &config, &patterns))
+                        .take(config.limit.unwrap_or(usize::MAX))
+                        .inspect(|s| {
+                            if (config.mode == Mode::Normal || config.print) && write_result.is_ok()
+                            {
+                                write_result = if config.null_bytes {
+                                    write!(out, "{}\0", s.to_string_lossy())
+                                } else {
+                                    writeln!(out, "{}", s.to_string_lossy())
+                                };
+                            }
+                            if config.mode == Mode::Statistics {
+                                stats.add_match(s);
+                            }
+                        })
+                        .count()
+                })?;
+                write_result?;
+
+                // print the rest of the statistics description
+                if config.mode == Mode::Statistics {
+                    stats.print(&mut out, &dbreader)?;
+                }
+
+                count += db_count;
+            }
+
+            if config.mode == Mode::Count {
+                writeln!(out, "{count}")?;
+            }
+
+            out.flush()?;
+
+            // zero matches isn't an error if --statistics is passed
+            if count == 0 && config.mode != Mode::Statistics {
+                return Err(Error::NoMatches);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn locate_main(args: &[&str]) -> i32 {
+    match do_locate(args) {
+        Ok(()) => 0,
+        Err(e) => {
+            match e {
+                Error::NoMatches => {}
+                _ => {
+                    let _ = writeln!(&mut stderr(), "Error: {e}");
+                }
+            }
+            e.code()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+    use std::path::Path;
+
+    use chrono::TimeDelta;
+
+    use super::{is_db_too_old, path_exists, DbReader, Statistics};
+
+    /// A writer that always fails, to emulate stdout with no space left
+    /// (`> /dev/full`) or a closed pipe.
+    struct FailWriter;
+
+    impl Write for FailWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+    }
+
+    #[test]
+    fn statistics_print_reports_write_errors_instead_of_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.bin");
+        std::fs::write(&db, b"\0LOCATE02\0\0/foo\0").unwrap();
+        let dbreader = DbReader::new(&db).unwrap();
+
+        let stats = Statistics::new();
+        // A failing writer must surface an error rather than panicking, so a
+        // full disk or closed pipe exits with a diagnostic instead of exit 101.
+        assert!(stats.print_header(&mut FailWriter, &dbreader).is_err());
+        assert!(stats.print(&mut FailWriter, &dbreader).is_err());
+    }
+
+    #[test]
+    fn db_too_old_compares_ordinary_ages() {
+        let day = TimeDelta::days(1);
+        assert!(is_db_too_old(day, 0));
+        assert!(!is_db_too_old(day, 8));
+    }
+
+    #[test]
+    fn db_too_old_ignores_max_age_beyond_i64() {
+        assert!(!is_db_too_old(TimeDelta::days(1), usize::MAX));
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn db_too_old_ignores_max_age_beyond_chrono_range() {
+        assert!(!is_db_too_old(TimeDelta::days(1), 1_000_000_000_000));
+    }
+
+    /// Create a symlink at `link` pointing at `target`, cross-platform.
+    #[cfg(unix)]
+    fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn make_symlink(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+
+    #[test]
+    fn path_exists_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        // a real file exists regardless of whether symlinks are followed
+        assert!(path_exists(&file, true));
+        assert!(path_exists(&file, false));
+    }
+
+    #[test]
+    fn path_exists_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        assert!(!path_exists(&missing, true));
+        assert!(!path_exists(&missing, false));
+    }
+
+    #[test]
+    fn path_exists_broken_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("dangling");
+        // creating a symlink on Windows requires privileges that CI may lack; skip the
+        // check gracefully when it isn't available rather than failing the test
+        if make_symlink(&dir.path().join("nonexistent-target"), &link).is_err() {
+            return;
+        }
+        // following the link resolves to the missing target -> non-existent
+        assert!(!path_exists(&link, true));
+        // not following the link checks the link itself, which exists
+        assert!(path_exists(&link, false));
+    }
+}

@@ -1,0 +1,154 @@
+name: "Builtins: set"
+cases:
+  - name: "set with no args"
+    stdin: |
+      MYVARIABLE=VALUE
+      set > set-output.txt
+      grep MYVARIABLE set-output.txt
+
+      # Remove set-output.txt to avoid it being byte-for-byte compared.
+      rm set-output.txt
+
+  - name: "Basic set usage"
+    stdin: |
+      set a b c d
+      echo ${*}
+
+  - name: "set with options"
+    stdin: |
+      function dumpopts {
+          # Dump the options
+          echo "[Options: $1]"
+          echo "set options: " $-
+          shopt -p -o pipefail
+      }
+
+      set -e -u -o pipefail
+      dumpopts enabled
+      echo '*: ' $*
+
+      set +e +u +o pipefail
+      dumpopts disabled
+      echo '*: ' $*
+
+  - name: "set with multiple combined options"
+    stdin: |
+      function dumpopts {
+          # Dump the options
+          echo "[Options: $1]"
+          echo "set options: " $-
+          shopt -p -o pipefail
+      }
+
+      set -euo pipefail
+      dumpopts enabled
+      echo '$*: ' $*
+
+      set +euo pipefail
+      dumpopts disabled
+      echo '$*: ' $*
+
+  - name: "set clearing args"
+    stdin: |
+      set a b c
+      echo ${*}
+      set a
+      echo ${*}
+
+  - name: "set with -"
+    stdin: |
+      set - a b c
+      echo "args: " ${*}
+      set -
+      echo "args: " ${*}
+
+  - name: "set with --"
+    stdin: |
+      set -- a b c
+      echo "args: " ${*}
+      set --
+      echo "args: " ${*}
+
+  - name: "set with option-looking args"
+    stdin: |
+      set -- a -v
+      echo ${*}
+
+      set - a -v
+      echo ${*}
+
+      set a -v
+      echo ${*}
+
+      set -- a +x
+      echo ${*}
+
+      set - a +x
+      echo ${*}
+
+      set a +x
+      echo ${*}
+
+  - name: "function-local set"
+    known_failure: true
+    stdin: |
+      function f() {
+          local -
+          set -x
+          echo "In func"
+      }
+
+      echo "Before func"
+      f
+      echo "After func"
+
+  - name: "set output quotes values"
+    stdin: |
+      q1="a'b"; q2="a''b"; q3="'"; q4="''"; q5="'a"; q6="a'"
+      set > set-output.txt
+      grep -E '^q[0-9]=' set-output.txt
+
+      # Remove set-output.txt to avoid it being byte-for-byte compared.
+      rm set-output.txt
+
+  - name: "set output leaves an empty value unquoted"
+    known_failure: true # TODO(escape): brush renders this as q1='' instead of q1=
+    stdin: |
+      q1=""
+      set > set-output.txt
+      grep -E '^q[0-9]=' set-output.txt
+
+      # Remove set-output.txt to avoid it being byte-for-byte compared.
+      rm set-output.txt
+
+  - name: "set quotes values starting with # or ~"
+    stdin: |
+      x="~" y="#z" z="a=~" w="a~"
+      set | grep -E "^(w|x|y|z)="
+
+  - name: "set leaves commas unquoted, like bash"
+    stdin: |
+      x="a,b" y="{a,b}" z=","
+      set | grep -E "^(x|y|z)="
+
+  - name: "set and declare -p leave commas in associative array keys unquoted, like bash"
+    stdin: |
+      declare -A m=([a,b]=1 [c]=2)
+      set | grep "^m="
+      declare -p m
+
+  - name: "set -o with an unknown option name"
+    known_failure: true # TODO(set): set -o bogus fails without bash's message
+    stdin: |
+      strip() { sed -E 's/\x1b\[[0-9;]*m//g; s/^[^ ]*: line [0-9]+: //; s/^error: //'; }
+      set -o bogus 2>&1 | strip
+      echo "set -o: ${PIPESTATUS[0]}"
+      set +o bogus 2>&1 | strip
+      echo "set +o: ${PIPESTATUS[0]}"
+
+  - name: "set rejects an option it doesn't have"
+    known_failure: true # TODO(set): set -Z and set +Z succeed with status 0
+    ignore_stderr: true
+    stdin: |
+      set -Z; echo "set -Z: $?"
+      set +Z; echo "set +Z: $?"

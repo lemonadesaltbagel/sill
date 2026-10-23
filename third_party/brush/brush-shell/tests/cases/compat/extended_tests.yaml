@@ -1,0 +1,628 @@
+name: "Extended tests"
+cases:
+  - name: "Extended test with redirect"
+    stdin: |
+      [[ $(echo hello >&2) ]] 2>/dev/null
+      echo "Result: $?"
+
+  - name: "File extended tests"
+    stdin: |
+      [[ -a /tmp ]] && echo "-a correctly checked /tmp"
+      [[ -a /some/non/existent/path ]] || echo "-a correctly checked non-existent path"
+
+      [[ -c /dev/null ]] && echo "-c correctly checked /dev/null"
+      [[ -c /tmp ]] || echo "-c correctly checked /tmp"
+
+  - name: "Existence tests"
+    stdin: |
+      [[ -e '' ]] || echo "-e correctly identified empty string as non-existent"
+
+      [[ -e non-existent ]] || echo "-e correctly identified non-existent path"
+      [[ ! -e non-existent ]] && echo "! -e correctly identified non-existent path"
+
+      touch test-file
+      [[ -e test-file ]] && echo "-e correctly identified existing non-dir"
+
+      mkdir test-dir
+      [[ -e test-dir ]] && echo "-d correctly identified existing dir"
+
+  - name: "Directory tests"
+    stdin: |
+      [[ -d '' ]] || echo "-d correctly identified empty string as non-existent"
+
+      [[ -d non-existent ]] || echo "-d correctly identified non-existent path"
+      [[ ! -d non-existent ]] && echo "! -d correctly identified non-existent path"
+
+      touch test-file
+      [[ -d test-file ]] || echo "-d correctly identified non-dir file"
+
+      mkdir test-dir
+      [[ -d test-dir ]] && echo "-d correctly identified existing dir"
+
+  - name: "File regular tests"
+    stdin: |
+      [[ -f '' ]] || echo "-f correctly identified empty string as non-existent"
+
+      [[ -f non-existent ]] || echo "-f correctly identified non-existent path"
+      [[ ! -f non-existent ]] && echo "! -f correctly identified non-existent path"
+
+      touch test-file
+      [[ -f test-file ]] && echo "-f correctly identified regular file"
+
+      mkdir test-dir
+      [[ -f test-dir ]] || echo "-f correctly identified directory as non-regular file"
+
+  - name: "File symbolic link tests"
+    stdin: |
+      [[ -L non-existent ]] || echo "-L correctly identified non-existent path"
+
+      touch test-file
+      [[ -L test-file ]] || echo "-L correctly identified non-link file"
+
+      ln -s test-file valid-link
+      [[ -L valid-link ]] && echo "-L correctly identified valid symbolic link"
+
+      ln -s non-existent-target dangling-link
+      [[ -L dangling-link ]] && echo "-L correctly identified dangling symbolic link"
+
+  - name: "File sticky bit tests"
+    stdin: |
+      touch test-file
+      [[ -k test-file ]] || echo "-k correctly identified file without sticky bit"
+
+      chmod 1600 test-file
+      [[ -k test-file ]] && echo "-k correctly identified file with sticky bit"
+
+  - name: "Fifo test"
+    stdin: |
+      touch test-file
+      [[ -p test-file ]] || echo "-p correctly identified non-fifo file"
+
+      mkfifo fifo-file
+      [[ -p test-file ]] && echo "-p correctly identified fifo file"
+
+  - name: "File executable tests"
+    stdin: |
+      [[ -x non-existent ]] || echo "-x correctly identified non-existent path"
+
+      touch test-file
+      ln -sf link test-file
+      [[ -x test-file ]] || echo "-x correctly identified non-executable file"
+      [[ -x link ]] || echo "-x correctly identified link to non-executable file"
+
+      chmod o+x test-file
+      [[ -x test-file ]] || echo "-x correctly identified other-only-executable file"
+      [[ -x link ]] || echo "-x correctly identified link to other-only-executable file"
+
+      chmod a+x test-file
+      [[ -x test-file ]] && echo "-x correctly identified executable file"
+      [[ -x link ]] && echo "-x correctly identified link to executable file"
+
+  - name: "File writable tests"
+    stdin: |
+      [[ -w non-existent ]] || echo "-w correctly identified non-existent path"
+
+      touch test-file
+      ln -sf link test-file
+      [[ -w test-file ]] || echo "-w correctly identified non-writable file"
+      [[ -w link ]] || echo "-w correctly identified link to non-writable file"
+
+      chmod o+x test-file
+      [[ -w test-file ]] || echo "-w correctly identified other-only-writable file"
+      [[ -w link ]] || echo "-w correctly identified link to other-only-writable file"
+
+      chmod a+x test-file
+      [[ -w test-file ]] && echo "-w correctly identified writable file"
+      [[ -w link ]] && echo "-w correctly identified link to writable file"
+
+  - name: "Variable set and nameref tests"
+    stdin: |
+      foo="bar"
+      declare -n bang=foo
+      [[ -R bang ]] && echo "-R correctly identified nameref variable that is set"
+
+      declare -n somevar
+      [[ -R somevar ]] || echo "-R correctly identified nameref variable that isn't set"
+
+  - name: "Files refer to same device and inode tests"
+    stdin: |
+      [[ /bin/sh -ef /bin/sh ]] && echo "-ef correctly identified device and inode numbers"
+
+      [[ ! /etc/os-release -ef /bin/sh ]] && echo "-ef correctly identified device and inode numbers that do not match"
+
+  - name: "File is newer"
+    stdin: |
+      touch -d "2 hours ago" bar
+      touch foo
+
+      [[ foo -nt bar ]] && echo "-nt correctly identified newer file"
+      [[ foo -nt foo ]] && echo "-nt incorrectly identified file as newer than itself"
+      [[ foo -nt file_no_exists ]] && echo "-nt correctly identified when file2 does not exist"
+
+  - name: "File is older"
+    stdin: |
+      touch -d "2 hours ago" foo
+      touch bar
+
+      [[ foo -ot bar ]] && echo "-ot correctly identified older file"
+      [[ foo -ot foo ]] && echo "-ot incorrectly identified file as older than itself"
+      [[ file_no_exists -ot foo ]] && echo "-ot correctly identified when file1 does not exist"
+
+  - name: "Unary string extended tests"
+    stdin: |
+      [[ -z "" ]] && echo "-z: Pass"
+      [[ -z "something" ]] && echo "-z: Fail"
+
+      [[ -n "something" ]] && echo "-n: Pass"
+      [[ -n "" ]] && echo "-n: Fail"
+
+  - name: "Shell option extended tests"
+    stdin: |
+      set -o emacs
+      [[ -o emacs ]] && echo "1: option enabled"
+
+      set +o emacs
+      [[ -o emacs ]] && echo "2: option enabled"
+
+  - name: "Binary string extended tests"
+    stdin: |
+      [[ "" == "" ]] && echo "1. Pass"
+      [[ "" = "" ]] && echo "2. Pass"
+      [[ "" != "" ]] && echo "3. Fail"
+
+      [[ "a" != "b" ]] && echo "4. Pass"
+      [[ "a" = "b" ]] && echo "5. Fail"
+      [[ "a" == "b" ]] && echo "6. Fail"
+
+      [[ "a" < "b" ]] && echo "7. Pass"
+      [[ "a" < "a" ]] && echo "8. Fail"
+      [[ "b" < "a" ]] && echo "9. Fail"
+      [[ "a" > "b" ]] && echo "10. Fail"
+      [[ "a" > "a" ]] && echo "11. Fail"
+      [[ "b" > "a" ]] && echo "12. Pass"
+
+  - name: "Binary string matching"
+    stdin: |
+      [[ "abc" == a* ]] && echo "1. Pass"
+      [[ "abc" != a* ]] && echo "2. Fail"
+      [[ a* != "abc" ]] && echo "3. Pass"
+
+  - name: "Binary string matching with expansion"
+    stdin: |
+      exclude="0123456789"
+      [[ "clue" == +([$exclude]) ]] && echo "1. Fail"
+      [[ "8675309" == +([$exclude]) ]] && echo "2. Pass"
+
+  - name: "Quoted pattern binary string matching"
+    stdin: |
+      [[ "abc" == "a*" ]] && echo "1. Matches"
+      [[ "abc" != "a*" ]] && echo "2. Matches"
+
+  - name: "Tilde binary string matching"
+    stdin: |
+      x='~/'
+      [[ $x == ~* ]] && echo "1. Matches"
+
+  - name: "Arithmetic extended tests"
+    stdin: |
+      [[ 0 -eq 0 ]] && echo "1. Pass"
+      [[ 0 -ne 0 ]] && echo "2. Fail"
+      [[ 0 -lt 0 ]] && echo "3. Fail"
+      [[ 0 -le 0 ]] && echo "4. Pass"
+      [[ 0 -gt 0 ]] && echo "5. Fail"
+      [[ 0 -ge 0 ]] && echo "6. Pass"
+
+      [[ 0 -eq 1 ]] && echo "7. Fail"
+      [[ 0 -ne 1 ]] && echo "8. Pass"
+      [[ 0 -lt 1 ]] && echo "9. Pass"
+      [[ 0 -le 1 ]] && echo "10. Pass"
+      [[ 0 -gt 1 ]] && echo "11. Fail"
+      [[ 0 -ge 1 ]] && echo "12. Fail"
+
+      [[ 1 -eq 0 ]] && echo "13. Fail"
+      [[ 1 -ne 0 ]] && echo "14. Pass"
+      [[ 1 -lt 0 ]] && echo "15. Fail"
+      [[ 1 -le 0 ]] && echo "16. Fail"
+      [[ 1 -gt 0 ]] && echo "17. Pass"
+      [[ 1 -ge 0 ]] && echo "18. Pass"
+
+  - name: "Regex"
+    stdin: |
+      [[ "a" =~ ^a$ ]]   && echo "1. Pass"
+      [[ "abc" =~ a* ]]  && echo "2. Pass"
+      [[ a =~ ^(a)$ ]]   && echo "3. Pass"
+      [[ a =~ ^(a|b)$ ]] && echo "4. Pass"
+      [[ a =~ c ]]       && echo "5. Pass"
+
+  # A ']' in the first member position (after any '^') is a member of the bracket
+  # expression, not its terminator.
+  - name: "Regex with leading ] in bracket expression"
+    stdin: |
+      [[ "]" =~ ^[]]$   ]] && echo "1. Matched"
+      [[ "a" =~ ^[]a]$  ]] && echo "2. Matched"
+      [[ "[" =~ ^[][]$  ]] && echo "3. Matched"
+      [[ "]" =~ ^[][]$  ]] && echo "4. Matched"
+      [[ "a" =~ ^[][]$  ]] || echo "5. Not matched"
+      [[ "[" =~ ^[^][]$ ]] || echo "6. Not matched"
+      [[ "a" =~ ^[^][]$ ]] && echo "7. Matched"
+      [[ "[" =~ ^[]a[]$ ]] && echo "8. Matched"
+      # Only the first '^' negates; the second is an ordinary member, so the ']'
+      # that follows it does terminate the expression.
+      [[ "xa" =~ ^[^^][ab]$ ]] && echo "9. Matched"
+      [[ "x[" =~ ^[^^][ab]$ ]] || echo "10. Not matched"
+      [[ "x]" =~ ^[^^]]$    ]] && echo "11. Matched"
+      # That leading ']' can also be the low end of a range.
+      [[ "^" =~ ^[]-a]$ ]] && echo "12. Matched"
+      [[ "]" =~ ^[]-a]$ ]] && echo "13. Matched"
+      [[ "-" =~ ^[]-a]$ ]] || echo "14. Not matched"
+      [[ "b" =~ ^[]-a]$ ]] || echo "15. Not matched"
+      echo "done"
+
+  # `fancy_regex` and POSIX ERE disagree on how a '-' range endpoint binds, and
+  # brush passes the user's bracket expression through without normalizing it.
+  - name: "Regex with '-' as a range endpoint"
+    known_failure: true
+    stdin: |
+      for s in '+' ',' '-' '.' '/' 'a'; do
+        [[ "$s" =~ ^[+--]$ ]] && echo "1. matched: $s"
+      done
+      for s in '+' ',' '-' '.' '/' 'a'; do
+        [[ "$s" =~ ^[--/]$ ]] && echo "2. matched: $s"
+      done
+      echo "done"
+
+  # A reversed range is rejected by both shells, but bash reports a bad regex as
+  # a usage error (status 2) while brush treats it as a failed match (status 1).
+  - name: "Regex with a reversed range"
+    known_failure: true
+    ignore_stderr: true
+    stdin: |
+      [[ x =~ ^[9-0]$ ]]
+      echo "status=$?"
+
+  # POSIX ERE reads '?*' as two stacked quantifiers; `fancy_regex` rejects the
+  # second as having no valid target.
+  - name: "Regex with stacked quantifiers"
+    known_failure: true
+    ignore_stderr: true
+    stdin: |
+      [[ "]" =~ ^[a]?*]$ ]]
+      echo "status=$?"
+
+  - name: "Regex with case insensitivity"
+    stdin: |
+      shopt -u nocasematch
+      [[ "a" =~ A ]] && echo "1. Pass"
+
+      shopt -s nocasematch
+      [[ "a" =~ A ]] && echo "1. Pass"
+
+  - name: "Regex with capture"
+    stdin: |
+      pattern='(Hello), ([a-z]+)\.'
+      if [[ "Hello, world." =~ ${pattern} ]]; then
+          echo "Match found!"
+          for i in "${!BASH_REMATCH[@]}"; do
+              echo "$i: '${BASH_REMATCH[$i]}'"
+          done
+      fi
+
+  - name: "Regex with capture including optional matches"
+    stdin: |
+      pattern='(Hello)(,?) ([a-z]+)\.'
+      if [[ "Hello world." =~ ${pattern} ]]; then
+          echo "Match found!"
+          for i in "${!BASH_REMATCH[@]}"; do
+              echo "$i: '${BASH_REMATCH[$i]}'"
+          done
+      fi
+
+  - name: "Regex with quoting"
+    stdin: |
+      regex="^$"
+
+      # TODO(test): The commented out lines appear differ in behavior between versions of bash.
+      # [[ "" =~ ''         ]] && echo "1. Matched"
+      [[ "" =~ '^$'       ]] && echo "2. Matched"
+      # [[ "" =~ ""         ]] && echo "3. Matched"
+      [[ "" =~ "^$"       ]] && echo "4. Matched"
+      [[ "" =~ ^$         ]] && echo "5. Matched"
+      [[ "" =~ ${regex}   ]] && echo "6. Matched"
+      [[ "" =~ "${regex}" ]] && echo "7. Matched"
+
+  - name: "Regex with escaping"
+    stdin: |
+      [[ '' =~ ^\$$ ]] && echo "1. Matched"
+
+  - name: "Regex with double parens"
+    stdin: |
+      if [[ xy =~ x+((y)) ]]; then
+        echo "Matches"
+      fi
+
+  - name: "Regex with special chars in parens"
+    stdin: |
+      [[ "<" =~ (<) ]] && echo "1. Matched"
+      [[ ">" =~ (<) ]] && echo "2. Matched"
+
+  - name: "Regex with spaces inside parens"
+    stdin: |
+      [[ "x" =~ (a| *) ]]   && echo "1. Matched"
+      [[ "a b" =~ ^(a |b) ]] && echo "2. Matched: [${BASH_REMATCH[0]}]"
+      [[ "a b" =~ ^(a |b)$ ]] || echo "3. No match"
+      [[ " " =~ ^( )$ ]]    && echo "4. Matched: [${BASH_REMATCH[1]}]"
+
+  - name: "Regex with unescaped open bracket in character class"
+    stdin: |
+      [[ "[" =~ ^([x[]) ]] && echo "Matched"
+
+  - name: "Empty and space checks"
+    stdin: |
+      check() {
+        var="$1"
+        [[ ${var} && ! ${var//[[:space:]]/} ]]
+      }
+
+      check ""    && echo "1. Only space"
+      check " "   && echo "2. Only space"
+      check $'\t' && echo "3. Only space"
+      check " a " && echo "4. Only space"
+
+  - name: "Newlines in test expression"
+    stdin: |
+      [[
+        "a" == "a"
+        &&
+        "b" == "b"
+      ]] && echo "Succeeded"
+
+  - name: "Variable set checks"
+    stdin: |
+      declare set_but_no_value
+      [[ -v set_but_no_value ]] && echo "1. Set but no value"
+
+      declare set_with_value=xyz
+      [[ -v set_with_value ]] && echo "2. Set with value"
+
+      [[ -v not_set ]] || echo "3. Not set"
+
+  - name: "Variable set checks on array elements"
+    known_failure: true # TODO(extended-tests): -v with a subscript always reports an array element as unset
+    stdin: |
+      indexed=(x y)
+      [[ -v indexed[1] ]] && echo "1. Indexed element set"
+      [[ -v indexed[5] ]] || echo "2. Indexed element unset"
+
+      declare -A assoc=([key]=value)
+      [[ -v assoc[key] ]] && echo "3. Associative element set"
+      [[ -v assoc[nope] ]] || echo "4. Associative element unset"
+
+      test -v 'indexed[0]' && echo "5. test -v sees the element"
+
+  - name: "Variables in extended tests"
+    stdin: |
+      var=10
+
+      [[ $var -eq 10 ]] && echo "1. Pass"
+      [[ var -eq 10 ]] && echo "2. Pass"
+
+  - name: "Regex with min/max counts"
+    stdin: |
+      [[ z =~ ^z{2,6}$ ]] && echo "1. Matches"
+      [[ zzzz =~ ^z{2,6}$ ]] && echo "2. Matches"
+      [[ zzzzzzzzz =~ ^z{2,6}$ ]] && echo "3. Matches"
+
+  - name: "Regex with newline"
+    stdin: |
+      [[ $'\n' =~ . ]] && echo "1. Matches"
+
+  - name: "Arithmetic comparisons with whitespace in operands"
+    stdin: |
+      # Leading/trailing whitespace should be trimmed before comparison
+      [[ 0 -eq ' 0' ]] && echo "1. leading space"
+      [[ 0 -eq '0 ' ]] && echo "2. trailing space"
+      [[ 0 -eq ' 0 ' ]] && echo "3. both spaces"
+
+      # Tabs
+      [[ 0 -eq '	0' ]] && echo "4. leading tab"
+      [[ 0 -eq '0	' ]] && echo "5. trailing tab"
+
+      # Newlines
+      [[ 0 -eq ' 0
+      ' ]] && echo "6. newline"
+
+      # Other operators
+      [[ 5 -lt ' 10' ]] && echo "7. -lt with space"
+      [[ 10 -gt ' 5' ]] && echo "8. -gt with space"
+      [[ 5 -ne ' 6' ]] && echo "9. -ne with space"
+      [[ 5 -le ' 5' ]] && echo "10. -le with space"
+      [[ 5 -ge ' 5' ]] && echo "11. -ge with space"
+
+      # Negative numbers with whitespace
+      [[ -5 -eq ' -5' ]] && echo "12. negative with space"
+
+  - name: "Terminal fd check with whitespace"
+    stdin: |
+      # -t operator should trim whitespace before parsing fd number
+      # These should all behave identically (false since not a terminal)
+      [[ -t 0 ]]
+      r1=$?
+      [[ -t ' 0' ]]
+      r2=$?
+      [[ -t '0 ' ]]
+      r3=$?
+
+      # All should have the same result
+      [[ $r1 -eq $r2 && $r2 -eq $r3 ]] && echo "All -t results match"
+
+  - name: "Nameref -R with attribute removal"
+    stdin: |
+      target="value"
+      declare -n ref=target
+      [[ -R ref ]] && echo "ref is a nameref"
+      [[ -R target ]] && echo "target is a nameref" || echo "target is not a nameref"
+      declare +n ref
+      [[ -R ref ]] && echo "still nameref" || echo "no longer a nameref"
+
+  - name: "Nameref -v follows nameref"
+    known_failure: true
+    stdin: |
+      target="value"
+      declare -n ref=target
+      [[ -v ref ]] && echo "ref is set (via target)"
+      unset target
+      [[ -v ref ]] && echo "ref still set" || echo "ref not set (target gone)"
+
+  - name: "Nameref -v to array element treats resolved name literally"
+    known_failure: true
+    stdin: |
+      arr=(a b c d)
+      declare -n ref='arr[2]'
+      [[ -v ref ]] && echo "set" || echo "unset"
+
+  - name: "Nameref -v with explicit subscript on nameref to whole array"
+    # TODO(nameref): brush doesn't yet handle [[ -v "ref[N]" ]] where ref is
+    # a nameref to a whole array. Bash resolves ref→arr and then checks arr[2],
+    # but brush currently treats the subscript as part of the nameref target
+    # string rather than applying it after resolution. The fix belongs in
+    # extendedtests.rs (ShellVariableIsSetAndAssigned) — the operand "ref[2]"
+    # needs to be split into name="ref" + subscript="2", the nameref resolved
+    # on the name portion, then the subscript applied to the resolved target.
+    known_failure: true
+    stdin: |
+      arr=(a b c d)
+      declare -n ref2=arr
+      [[ -v "ref2[2]" ]] && echo "set" || echo "unset"
+
+  - name: "Nameref -v to nonexistent array index"
+    known_failure: true
+    stdin: |
+      arr=(a b c)
+      declare -n ref='arr[5]'
+      [[ -v ref ]] && echo "set" || echo "unset"
+
+  #
+  # Newlines within [[ ]] conditional expressions.
+  #
+  # bash allows newlines (1) at the start of a term (after `[[`, `(`, `&&`,
+  # `||`, `!`) and (2) trailing after a complete binary/unary/parenthesized
+  # term -- but NOT after a bare-word string test. These cases pin down both
+  # the accepted and rejected forms. See issue #1176.
+  #
+
+  - name: "Newline after ( in [[ ]]"
+    stdin: |
+      [[ (
+      a = a ) ]] && echo ok
+
+  - name: "Newline after ( before bare word in [[ ]]"
+    stdin: |
+      [[ (
+      a ) ]] && echo ok
+
+  - name: "Newline before ) after binary test in [[ ]]"
+    stdin: |
+      [[ ( a = a
+      ) ]] && echo ok
+
+  - name: "Newline before ) after unary test in [[ ]]"
+    stdin: |
+      [[ ( -n a
+      ) ]] && echo ok
+
+  - name: "Newline before ) after nested parens in [[ ]]"
+    stdin: |
+      [[ ( ( a = a )
+      ) ]] && echo ok
+
+  - name: "Multiple newlines before ) in [[ ]]"
+    stdin: |
+      [[ ( a = a
+
+
+
+      ) ]] && echo ok
+
+  - name: "Newline after && in [[ ]]"
+    stdin: |
+      [[ ( a = a &&
+      b = b ) ]] && echo ok
+
+  - name: "Newline before && after binary test in [[ ]]"
+    stdin: |
+      [[ a = a
+      && b = b ]] && echo ok
+
+  - name: "Newline before || after binary test in [[ ]]"
+    stdin: |
+      [[ a = b
+      || b = b ]] && echo ok
+
+  - name: "Leading newline after [[ "
+    stdin: |
+      [[
+      a = a ]] && echo ok
+
+  - name: "Newline after ! in [[ ]]"
+    stdin: |
+      [[ !
+      a = b ]] && echo ok
+
+  - name: "Newline before ]] after binary test"
+    stdin: |
+      [[ a = a
+      ]] && echo ok
+
+  - name: "Newline before ]] after unary test"
+    stdin: |
+      [[ -n a
+      ]] && echo ok
+
+  - name: "Newline before ]] after parenthesized expression"
+    stdin: |
+      [[ ( a = a )
+      ]] && echo ok
+
+  - name: "Newline before ]] after not of parenthesized expression"
+    stdin: |
+      [[ ! ( a = b )
+      ]] && echo ok
+
+  # Cases bash rejects as syntax errors: a newline may not follow a bare-word
+  # string test (whether before `]]`, `)`, or a binary/logical operator).
+
+  - name: "Error: newline before ]] after bare word"
+    ignore_stderr: true
+    stdin: |
+      [[ a
+      ]] && echo should-not-print
+
+  - name: "Error: newline before ) after bare word"
+    ignore_stderr: true
+    stdin: |
+      [[ ( a
+      ) ]] && echo should-not-print
+
+  - name: "Error: newline before && after bare word"
+    ignore_stderr: true
+    stdin: |
+      [[ a
+      && b ]] && echo should-not-print
+
+  - name: "Error: newline before ) after not of bare word"
+    ignore_stderr: true
+    stdin: |
+      [[ ( ! a
+      ) ]] && echo should-not-print
+
+  # POSIX regexes have no line anchors: ^ and $ match only at the ends of the
+  # whole string, while . matches any character including newline.
+  - name: "Regex anchors match the whole string, not lines"
+    stdin: |
+      s=$'a\nb'
+      [[ $s =~ ^b ]] && echo "wrong 1" || echo "ok 1"
+      [[ $s =~ a$ ]] && echo "wrong 2" || echo "ok 2"
+      [[ $s =~ ^a.b$ ]] && echo "ok 3"
+      t=$' \t\nabc \t\n'
+      re=$'[ \t\n]+$'
+      [[ $t =~ $re ]] && printf '[%s]\n' "${t::${#t}-${#BASH_REMATCH}}"

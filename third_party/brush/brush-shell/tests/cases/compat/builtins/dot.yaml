@@ -1,0 +1,162 @@
+name: "Builtins: dot"
+cases:
+  - name: "Basic dot usage"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In sourced script"
+          var="updated"
+    stdin: |
+      var="orig"
+      . script.sh
+      echo "var: ${var}"
+
+  - name: "Basic source usage"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In sourced script"
+          for f in ${FUNCNAME[@]}; do
+            echo "FUNCNAME: '${f}'"
+          done
+          for s in ${BASH_SOURCE[@]}; do
+            echo "BASH_SOURCE: '${s}'"
+          done
+          var="updated"
+
+          function script_func() {
+            echo "In script func"
+            for f in ${FUNCNAME[@]}; do
+              echo "FUNCNAME: '${f}'"
+            done
+            for s in ${BASH_SOURCE[@]}; do
+              echo "BASH_SOURCE: '${s}'"
+            done
+          }
+    stdin: |
+      var="orig"
+      source ./script.sh
+      echo "var: ${var}"
+      script_func
+
+  - name: "Source non-existent file path"
+    ignore_stderr: true
+    stdin: |
+      source script.sh
+      echo "Result: $?"
+
+  - name: "Source dir"
+    ignore_stderr: true
+    stdin: |
+      source .
+      echo "Result: $?"
+
+  - name: "Source script without args"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In sourced script"
+          echo "Args: $@"
+    stdin: |
+      set -- outer1 outer2 outer3
+      source script.sh
+
+  - name: "Source script with args"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In sourced script"
+          echo "Args: $@"
+    stdin: |
+      set -- outer1 outer2 outer3
+      source script.sh inner1 inner2
+
+  - name: "Source with redirection"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In sourced script"
+    stdin: |
+      source script.sh arg1 arg2 > out.txt
+      echo "Sourced script; dumping..."
+      cat out.txt
+
+  - name: "Source /dev/stdin with heredoc redirection"
+    stdin: |
+      VAR=outer
+      VAR=scoped . /dev/stdin <<'EOF'
+      echo "VAR in source: $VAR"
+      INNER=from_source
+      EOF
+      echo "VAR after source: $VAR"
+      echo "INNER after source: $INNER"
+
+  - name: "Source with return"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "Before return"
+          return 42
+          echo "After return"
+    stdin: |
+      echo "Before source"
+      source script.sh
+      echo "After source, exit code: $?"
+
+  - name: "Source with exit"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "Before exit"
+          exit 42
+          echo "After exit"
+    stdin: |
+      echo "Before source"
+      source script.sh
+      echo "After source"
+
+  - name: "Source with break in caller's loop"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In script, breaking"
+          break
+    stdin: |
+      for i in 1 2 3; do
+        echo "Iteration $i"
+        source script.sh
+        echo "After source"
+      done
+      echo "After loop"
+
+  - name: "Source with continue in caller's loop"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In script, continuing"
+          continue
+          echo "After continue"
+    stdin: |
+      for i in 1 2 3; do
+        echo "Iteration $i"
+        source script.sh
+        echo "After source"
+      done
+      echo "After loop"
+
+  - name: "Sourcing a missing file fails and goes on"
+    ignore_stderr: true
+    stdin: |
+      . /nonexistent-file
+      echo "after: $?"
+
+  - name: "Sourcing a file with an unset variable under set -u ends the shell"
+    ignore_stderr: true
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "sourced $nope"
+    stdin: |
+      set -u
+      . ./script.sh; echo "rc=$?"
+      echo next

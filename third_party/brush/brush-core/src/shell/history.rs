@@ -1,0 +1,126 @@
+//! History management for shells.
+
+use std::{collections::BTreeSet, path::PathBuf};
+
+use crate::{error, history::HistoryControl, openfiles};
+
+impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
+    pub(super) fn load_history(&self) -> Result<Option<crate::history::History>, error::Error> {
+        const MAX_FILE_SIZE_FOR_HISTORY_IMPORT: u64 = 1024 * 1024 * 1024; // 1 GiB
+
+        let Some(history_path) = self.history_file_path() else {
+            return Ok(None);
+        };
+
+        let mut options = std::fs::File::options();
+        options.read(true);
+
+        let mut history_file =
+            self.open_file(&options, history_path, &self.default_exec_params())?;
+
+        // Check on the file's size.
+        if let openfiles::OpenFile::File(file) = &mut history_file {
+            let file_metadata = file.metadata()?;
+            let file_size = file_metadata.len();
+
+            // If the file is empty, no reason to try reading it. Note that this will also
+            // end up excluding non-regular files that report a 0 file size but appear
+            // to have contents when read.
+            if file_size == 0 {
+                return Ok(None);
+            }
+
+            // Bail if the file is unrealistically large. For now we just refuse to import it.
+            if file_size > MAX_FILE_SIZE_FOR_HISTORY_IMPORT {
+                return Err(error::ErrorKind::HistoryFileTooLargeToImport.into());
+            }
+        }
+
+        let history = crate::history::History::import(history_file)?;
+        Ok(Some(history))
+    }
+
+    /// Returns the path to the history file used by the shell, if one is set.
+    pub fn history_file_path(&self) -> Option<PathBuf> {
+        self.env_str("HISTFILE")
+            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(s.into_owned()))
+    }
+
+    /// Returns the path to the history file used by the shell, if one is set.
+    pub fn history_time_format(&self) -> Option<String> {
+        self.env_str("HISTTIMEFORMAT").map(|s| s.into_owned())
+    }
+
+    /// Saves history back to any backing storage.
+    pub fn save_history(&mut self) -> Result<(), error::Error> {
+        if let Some(history_file_path) = self.history_file_path()
+            && let Some(history) = &mut self.history
+        {
+            // See if there's *any* time format configured. That triggers writing out
+            // timestamps.
+            let write_timestamps = self.env.is_set("HISTTIMEFORMAT");
+
+            // TODO(history): Observe options.append_to_history_file
+            history.flush(
+                history_file_path,
+                true, /* append? */
+                true, /* unsaved items only? */
+                write_timestamps,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Adds a command to history. Like bash, an interactive shell leaves it out or makes room
+    /// for it as the colon-separated values of `HISTCONTROL` say:
+    ///
+    /// - `ignorespace`: leave it out if it starts with a space.
+    /// - `ignoredups`: leave it out if it's the same as the last entry.
+    /// - `ignoreboth`: both of those.
+    /// - `erasedups`: first remove any earlier entries the same as it.
+    pub fn add_to_history(&mut self, command: &str) -> Result<(), error::Error> {
+        let controls = if self.options.interactive {
+            self.env_str("HISTCONTROL")
+                .map(|value| HistoryControl::parse_list(&value))
+                .unwrap_or_default()
+        } else {
+            BTreeSet::new()
+        };
+
+        let Some(history) = &mut self.history else {
+            return Ok(());
+        };
+
+        if controls.contains(&HistoryControl::IgnoreSpace) && command.starts_with(' ') {
+            return Ok(());
+        }
+
+        // Like bash, save the command as typed, surrounding whitespace and all, but leave out
+        // blank ones.
+        if command.trim().is_empty() {
+            return Ok(());
+        }
+
+        if controls.contains(&HistoryControl::IgnoreDups)
+            && history
+                .last()
+                .is_some_and(|last| last.command_line == command)
+        {
+            return Ok(());
+        }
+        if controls.contains(&HistoryControl::EraseDups) {
+            history.retain(|item| item.command_line != command);
+        }
+
+        history.add(crate::history::Item {
+            id: 0,
+            command_line: command.to_owned(),
+            timestamp: Some(chrono::Utc::now()),
+            dirty: true,
+        })?;
+
+        Ok(())
+    }
+}

@@ -1,0 +1,232 @@
+name: "Patterns"
+cases:
+  - name: "Expansion with escaped characters"
+    test_files:
+      - path: "file*.txt"
+    stdin: "echo file\\*.txt"
+
+  - name: "Basic pattern matching"
+    stdin: |
+      test_pattern() {
+        local str="$1"
+        local pattern="$2"
+
+        if [[ "${str}" == ${pattern} ]]; then
+          echo "Matched: ${str} using ${pattern}"
+        else
+          echo "No match: ${str} using ${pattern}"
+        fi
+      }
+
+      test_pattern "abc" "a*"
+      test_pattern "abc" "b*"
+
+      test_pattern "?bc" "abc"
+      test_pattern "?bc" "aabc"
+
+      test_pattern "ac" "[ab]c"
+      test_pattern "bc" "[ab]c"
+      test_pattern "cc" "[ab]c"
+
+      test_pattern "ad" "[a-c]d"
+      test_pattern "bd" "[a-c]d"
+      test_pattern "dd" "[a-c]d"
+
+      test_pattern "1" "[[:alpha:]]"
+      test_pattern "a" "[[:alpha:]]"
+
+      test_pattern "a/b" "*b"
+      test_pattern "a/b" "a/b"
+      test_pattern "a/b" "*/*"
+
+  - name: "Extglob pattern matching"
+    stdin: |
+      shopt -s extglob
+
+      test_pattern() {
+        local str="$1"
+        local pattern="$2"
+
+        if [[ "${str}" == ${pattern} ]]; then
+          echo "Matched: ${str} using ${pattern}"
+        else
+          echo "No match: ${str} using ${pattern}"
+        fi
+      }
+
+      test_pattern "aabc" "!(a*)"
+      test_pattern "abc" "!(a*)"
+      test_pattern "def" "!(a*)"
+
+      test_pattern "a.foo.tar.gz" "a.!(foo|bar).tar.gz"
+      test_pattern "a.bar.tar.gz" "a.!(foo|bar).tar.gz"
+      test_pattern "a.baz.tar.gz" "a.!(foo|bar).tar.gz"
+      test_pattern "a.tar.tar.gz" "a.!(foo|bar).tar.gz"
+      test_pattern "a..tar.gz" "a.!(foo|bar).tar.gz"
+      test_pattern "a.tar.gz" "a.!(foo|bar).tar.gz"
+
+      test_pattern "abc" "@(abc|def)"
+      test_pattern "def" "@(abc|def)"
+      test_pattern "ghi" "@(abc|def)"
+
+      test_pattern "abc" "ab?(c)"
+      test_pattern "ab" "ab?(c)"
+      test_pattern "abd" "ab?(c)"
+
+      test_pattern "" "*(ab|ac)"
+      test_pattern "ab" "*(ab|ac)"
+      test_pattern "abab" "*(ab|ac)"
+      test_pattern "ad" "*(ab|ac)"
+
+      test_pattern "" "+(ab|ac)"
+      test_pattern "ab" "+(ab|ac)"
+      test_pattern "abab" "+(ab|ac)"
+      test_pattern "ad" "+(ab|ac)"
+
+  - name: "Extglob with escaping"
+    stdin: |
+      shopt -s extglob
+
+      [[ \( == +(\() ]] && echo "1. Matched"
+      [[ x  == +(\() ]] && echo "2. Matched"
+      [[ \) == +(\)) ]] && echo "3. Matched"
+      [[ x  == +(\)) ]] && echo "4. Matched"
+
+  - name: "Patterns: quoting"
+    stdin: |
+      [[ "abc" == "a"* ]] && echo "1. Matched"
+      [[ "abc" == a"*" ]] && echo "2. Matched"
+      [[ "abc" == "a*" ]] && echo "3. Matched"
+
+  - name: "Patterns: escaped special characters"
+    stdin: |
+      myfunc() {
+        if [[ $1 == \\* ]]; then
+          echo "Matched: '$1'"
+        else
+          echo "Did *not* match: '$1'"
+        fi
+      }
+
+      myfunc abc
+      myfunc "*"
+
+  - name: "Pattern matching: character ranges"
+    stdin: |
+      [[ "x" == [a-z]   ]] && echo "1. Matched"
+      [[ "x" == [0-9]   ]] && echo "2. Matched"
+      [[ "-" == [---]   ]] && echo "3. Matched"
+      [[ "*" == [\*-\*] ]] && echo "4. Matched"
+      [[ "-" == [\*-\*] ]] && echo "5. Matched"
+      [[ "." == [\*-/]  ]] && echo "6. Matched"
+
+  - name: "Pattern matching: invalid character ranges"
+    stdin: |
+      [[ "a" == [f-a] ]] && echo "1. Matched"
+      [[ "b" == [f-a] ]] && echo "2. Matched"
+      [[ "f" == [f-a] ]] && echo "3. Matched"
+      [[ "g" == [f-a] ]] && echo "4. Matched"
+
+  - name: "Pattern matching: escaped hyphen in bracket"
+    stdin: |
+      [[ "-" == [a\-\*] ]] && echo "1. Matched"
+      [[ "*" == [a\-\*] ]] && echo "2. Matched"
+      [[ "a" == [a\-\*] ]] && echo "3. Matched"
+      [[ "b" == [a\-\*] ]] && echo "4. Matched"
+      [[ "a" == [a\-f]  ]] && echo "5. Matched"
+      [[ "b" == [a\-f]  ]] && echo "6. Matched"
+      [[ "f" == [a\-f]  ]] && echo "7. Matched"
+
+  - name: "Pattern matching: character sets"
+    stdin: |
+      [[ "x" == [abc]  ]] && echo "1. Matched"
+      [[ "x" == [xyz]  ]] && echo "2. Matched"
+      [[ "x" == [^xyz] ]] && echo "3. Matched"
+      [[ "x" == [!xyz] ]] && echo "4. Matched"
+      [[ "(" == [\(]   ]] && echo "5. Matched"
+      [[ "+" == [+-]   ]] && echo "6. Matched"
+      [[ "[" == [\[]   ]] && echo "7. Matched"
+      [[ "]" == [\]]   ]] && echo "8. Matched"
+      [[ "^" == [\^]   ]] && echo "9. Matched"
+
+  - name: "Pattern matching: character classes"
+    stdin: |
+      [[ "1" == [[:digit:]] ]] && echo "1. Matched"
+      [[ "1" == [[:alpha:]] ]] && echo "2. Matched"
+
+  - name: "Pattern matching: case sensitivity"
+    stdin: |
+      shopt -u nocasematch
+      [[ "abc" == "ABC" ]]     && echo "1. Matched"
+      [[ "abc" == "[A-Z]BC" ]] && echo "2. Matched"
+
+      shopt -s nocasematch
+      [[ "abc" == "ABC" ]]     && echo "3. Matched"
+      [[ "abc" == "[A-Z]BC" ]] && echo "4. Matched"
+
+  - name: "Pattern matching: stars in negative extglobs"
+    stdin: |
+      shopt -s extglob
+      [[ 'd' == !(*d)d ]] && echo "1. Matched"
+
+  - name: "Pattern matching: quotes in character class"
+    stdin: |
+      [[ f == ['f'] ]] && echo "1. Matched"
+
+  # A ']' first in a bracket expression (after any '!' or '^') is a member,
+  # not the end of the expression.
+  - name: "Pattern matching: leading ] in bracket expression"
+    stdin: |
+      [[ "]" == [][] ]] && echo "1. Matched"
+      [[ "a" == [][a] ]] && echo "2. Matched"
+      [[ "[" == []abc[] ]] && echo "3. Matched"
+      [[ "x" == [^][] ]] && echo "4. Matched"
+      [[ "]" == [!]] ]] || echo "5. Not matched"
+      s="a]b[c"
+      echo "${s//[][]/_}"
+      # ble.sh strips function names out of `declare -F` output with this extglob;
+      # the bracket expression is meant to cover ']', '[', '{', '}', ':' and alnum.
+      shopt -s extglob
+      v=$'\nxxx is a function\nhello\n'
+      p=$'\n+([][{}:[:alnum:]]) is a function\n'
+      printf '[%s]\n' "${v//$p/|}"
+
+  # A range whose low end is that leading ']' is validated like any other range;
+  # a reversed one matches nothing (or, inverted, everything).
+  - name: "Pattern matching: ranges starting at a leading ] in bracket expression"
+    stdin: |
+      for s in ']' 'a' 'A' '^' '-'; do
+        [[ "$s" == []-a] ]] && echo "in-range: $s"
+      done
+      for s in ']' 'a' 'A' '^' '-'; do
+        [[ "$s" == []-A] ]] && echo "reversed range matched: $s"
+      done
+      for s in ']' 'a' 'A' '^' '-'; do
+        [[ "$s" == [!]-A] ]] && echo "inverted reversed range matched: $s"
+      done
+      echo "done"
+
+  # An invalid (reversed) range is dropped from the bracket expression, but the
+  # surviving members are still emitted in order. A '^' left first that way must
+  # not negate the generated regex character class.
+  - name: "Pattern matching: invalid range leaving a leading ^ member"
+    stdin: |
+      for s in '^' 'a' 'b'; do
+        [[ "$s" == [9-0^a] ]] && echo "1. matched: $s"
+      done
+      for s in '^' 'a' 'b'; do
+        [[ "$s" == [z-a^] ]] && echo "2. matched: $s"
+      done
+      echo "done"
+
+  # A '-' endpoint must be escaped in the generated regex, or the class becomes
+  # ambiguous and the range collapses to a set.
+  - name: "Pattern matching: '-' as a range endpoint"
+    stdin: |
+      for s in '+' ',' '-' '.' '/' 'a'; do
+        [[ "$s" == [+--] ]] && echo "1. matched: $s"
+      done
+      for s in '+' ',' '-' '.' '/' 'a'; do
+        [[ "$s" == [--/] ]] && echo "2. matched: $s"
+      done
+      echo "done"

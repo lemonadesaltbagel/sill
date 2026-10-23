@@ -1,0 +1,173 @@
+[package]
+name = "brush-shell"
+description = "Rust-implemented shell focused on POSIX and bash compatibility"
+version = "0.4.0"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+# Application tier; see docs/reference/msrv-policy.md.
+rust-version = "1.95.0"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/brush-{ target }{ archive-suffix }"
+
+[lib]
+bench = false
+
+[[bin]]
+name = "brush"
+path = "src/main.rs"
+bench = false
+
+[[test]]
+name = "brush-compat-tests"
+path = "tests/compat_tests.rs"
+harness = false
+
+[[test]]
+name = "brush-integration-tests"
+path = "tests/integration_tests.rs"
+harness = false
+
+[[test]]
+name = "brush-version-tests"
+path = "tests/version_tests.rs"
+
+[[test]]
+name = "brush-interactive-tests"
+path = "tests/interactive_tests.rs"
+
+[[test]]
+name = "brush-completion-tests"
+path = "tests/completion_tests.rs"
+
+# N.B. tests/pty_startup_tests.rs, tests/reedline_interactive_tests.rs, and
+# tests/vt_interactive_tests.rs are deliberately left auto-discovered (no
+# `brush-*-tests` name): the CI `brush_*_tests-*` artifact glob would otherwise
+# ship them to the os-tests
+# jobs, which run prebuilt test binaries outside a cargo target dir and so
+# can't run pty-based tests (see the interactive/version test skips there).
+
+# Generates man pages, markdown help, completion scripts, and the config
+# schema. Lives here so that xtask doesn't have to depend on brush-shell;
+# `cargo xtask gen` shells out to it.
+[[example]]
+name = "gen"
+path = "examples/gen.rs"
+required-features = ["schema"]
+
+[[bench]]
+name = "shell"
+path = "benches/shell.rs"
+harness = false
+
+[features]
+# Input backends. Each can be enabled for any target, and is offered where it
+# works (see `build.rs`), so the defaults suit every target.
+default = ["basic", "reedline", "minimal", "vt"]
+basic = ["brush-interactive/basic"]
+minimal = ["brush-interactive/minimal"]
+reedline = ["brush-interactive/reedline"]
+vt = ["brush-interactive/vt"]
+experimental = [
+    "experimental-builtins",
+    "experimental-bundled-coreutils",
+    "experimental-load",
+    "experimental-parser",
+]
+experimental-builtins = ["dep:brush-experimental-builtins"]
+experimental-bundled-coreutils = [
+    "dep:brush-coreutils-builtins",
+    "brush-coreutils-builtins/coreutils.all",
+    "brush-coreutils-builtins/findutils.find",
+]
+experimental-load = ["dep:serde_json", "brush-core/serde"]
+experimental-parser = [
+    "brush-core/experimental-parser",
+    "brush-parser/winnow-parser",
+]
+schema = ["dep:schemars"]
+
+[lints]
+workspace = true
+
+[dependencies]
+brush-clap-adapter = { version = "^0.1.0", path = "../brush-clap-adapter" }
+brush-core = { version = "^0.5.0", path = "../brush-core" }
+brush-builtins = { version = "^0.2.0", path = "../brush-builtins" }
+brush-interactive = { version = "^0.4.0", path = "../brush-interactive" }
+brush-coreutils-builtins = { version = "^0.1.0", path = "../brush-coreutils-builtins", optional = true }
+brush-experimental-builtins = { version = "^0.1.0", path = "../brush-experimental-builtins", optional = true }
+clap = { version = "4.6.0", features = ["derive", "env"] }
+color-print = "0.3.7"
+etcetera = "0.11.0"
+schemars = { version = "1.2.1", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1.0"
+const_format = "0.2.36"
+git-version = "0.3.9"
+serde_json = { version = "1.0.149", optional = true }
+thiserror = "2.0.18"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+human-panic = "2.0.6"
+
+[target.'cfg(not(any(unix, windows)))'.dependencies]
+tokio = { version = "1.52.3", features = ["rt", "sync"] }
+
+[target.'cfg(any(unix, windows))'.dependencies]
+crossterm = "0.29.0"
+tokio = { version = "1.52.3", features = ["rt", "rt-multi-thread", "sync"] }
+
+[target.wasm32-unknown-unknown.dependencies]
+getrandom = { version = "0.4.2", features = ["wasm_js"] }
+uuid = { version = "1", features = ["js"] }
+
+[dev-dependencies]
+anyhow = "1.0.102"
+tempfile = "3.27.0"
+# Used by the `gen` example.
+clap-markdown = "0.1.5"
+clap_complete = "4.6.4"
+clap_mangen = "0.3.0"
+# Also a regular optional dependency, enabled by `experimental-load`. The `gen`
+# example needs it without that feature, so it's listed here too.
+serde_json = "1.0.149"
+brush-parser = { version = "^0.4.0", path = "../brush-parser" }
+brush-test-harness = { path = "../brush-test-harness", features = ["insta"] }
+assert_cmd = "2.2.0"
+assert_fs = "1.1.3"
+colored = "3.1.1"
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+descape = "3.0.0"
+diff = "0.1.13"
+glob = "0.3.3"
+indent = "0.1.1"
+indexmap = "2.13.0"
+junit-report = "0.9.0"
+os-release = "0.1.0"
+predicates = "3.1.4"
+pretty_assertions = { version = "1.4.1", features = ["unstable"] }
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+yaml_serde = "0.10.7"
+strip-ansi-escapes = "0.2.1"
+test-with = { version = "0.17.0", default-features = false, features = [
+    "executable",
+] }
+tokio = { version = "1.52.3", features = ["time"] }
+version-compare = "0.2.1"
+walkdir = "2.5.0"
+which = "8.0.2"
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31.2" }
+
+# expectrl's pty support (via ptyprocess) is limited to these platforms;
+# the interactive tests that rely on it are gated accordingly.
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "freebsd"))'.dev-dependencies]
+expectrl = "0.9.0"

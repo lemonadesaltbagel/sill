@@ -1,0 +1,127 @@
+name: "Compound commands: while"
+cases:
+  - name: "Single-line while loop"
+    stdin: |
+      while false; do echo 'In loop'; done
+
+  - name: "break in while loop"
+    stdin: |
+      while true; do
+        echo 'In loop'
+        break
+      done
+
+  - name: "break 2 in nested loops"
+    stdin: |
+      while false; do
+        echo 'Starting inner loop'
+        while true; do
+          echo 'In loop'
+          break 2
+        done
+        echo 'Finished inner loop'
+      done
+
+  - name: "Arithmetic in while loop"
+    stdin: |
+      i=5
+      while ((i > 0)); do echo $i; i=$((i - 1)); done
+
+  - name: "Alternative arithmetic in while loop"
+    stdin: |
+      c=0
+      limit=4
+      while [ $c -lt $limit ]; do
+        case "$c" in
+        0)
+          echo "0"
+          ;;
+        1)
+          echo "1"
+          ;;
+        *)
+          break
+          ;;
+        esac
+        ((c++))
+      done
+      echo "Done"
+
+  - name: "While with return in condition"
+    stdin: |
+      f() {
+        while return 42; do
+          echo "Body"
+        done
+        echo "After while"
+      }
+      f
+      echo "Exit code: $?"
+
+  - name: "While with exit in condition"
+    stdin: |
+      while exit 42; do
+        echo "Body"
+      done
+      echo "After while"
+
+  - name: "While with break in condition inside outer loop"
+    stdin: |
+      for i in 1 2 3; do
+        echo "Outer iteration $i"
+        while break; do
+          echo "While body"
+        done
+        echo "After while"
+      done
+      echo "After outer loop"
+
+  - name: "While with break 2 in condition inside outer loop"
+    stdin: |
+      for i in 1 2 3; do
+        echo "Outer iteration $i"
+        while break 2; do
+          echo "While body"
+        done
+        echo "After while"
+      done
+      echo "After outer loop"
+
+  - name: "While with continue 2 in condition inside outer loop"
+    stdin: |
+      for i in 1 2 3; do
+        echo "Outer iteration $i"
+        while continue 2; do
+          echo "While body"
+        done
+        echo "After while"
+      done
+      echo "After outer loop"
+
+  - name: "While with return in body"
+    stdin: |
+      f() {
+        i=0
+        while [ $i -lt 3 ]; do
+          echo "Iteration $i"
+          if [ $i -eq 1 ]; then
+            return 42
+          fi
+          i=$((i + 1))
+        done
+        echo "After while"
+      }
+      f
+      echo "Exit code: $?"
+
+  - name: "While with exit in body"
+    stdin: |
+      i=0
+      while [ $i -lt 3 ]; do
+        echo "Iteration $i"
+        if [ $i -eq 1 ]; then
+          exit 42
+        fi
+        i=$((i + 1))
+      done
+      echo "After while"

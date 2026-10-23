@@ -1,0 +1,649 @@
+name: "Call stack"
+common_test_files:
+  - path: "callstack_helpers.sh"
+    contents: |
+      # Helper to dump frame-independent call stack state.
+      # Optionally takes a prefix string to use in all output.
+      dump_source_info() {
+          local prefix="${1:-}"
+
+          # Normalize shell name to make sure it matches.
+          # TODO: Once all tests are run on 5.3, this will need to be revisited.
+          echo "${prefix}  caller: $(caller 2>&1 || echo '<failed>')" | sed -e "s|$0|main|g" | sed -e "s/environment/main/g"
+
+          echo "${prefix}  LINENO: ${LINENO}"
+          echo "${prefix}  FUNCNAME[@]: ${FUNCNAME[*]}"
+
+          # Normalize shell name to make sure it matches.
+          # TODO: Once all tests are run on 5.3, this will need to be revisited.
+          echo "${prefix}  BASH_SOURCE[@]: ${BASH_SOURCE[*]}" | sed -e "s|$0|main|g" | sed -e "s/environment/main/g"
+
+          # TODO(BASH_LINENO): implement correct BASH_LINENO tracking
+          # echo "${prefix}  BASH_LINENO[@]: ${BASH_LINENO[*]}"
+      }
+
+      # Helper to dump frame-specific call stack state
+      dump_frame() {
+          local prefix="${1:-}"
+          local frame="${2:-0}"
+          
+          echo "${prefix}[Frame $frame]"
+
+          # Normalize shell name to make sure it matches.
+          # TODO: Once all tests are run on 5.3, this will need to be revisited.
+          echo "${prefix}  caller N: $(caller $frame 2>&1 || echo '<failed>')" | sed -e "s|$0|main|g" | sed -e "s/environment/main/g"
+      }
+
+      # Helper to dump all stack info
+      dump_stack() {
+          local prefix="${1:-}"
+
+          dump_source_info "$prefix"
+
+          local max_frames="${2:-20}"
+          local i
+          for ((i=0; i<max_frames; i++)); do
+              if ! caller $i >/dev/null 2>&1; then
+                  break
+              fi
+              dump_frame "$prefix" $i
+          done
+      }
+
+cases:
+  - name: "No calls - top level"
+    stdin: |
+      source callstack_helpers.sh
+
+      echo "=== Top level ==="
+      dump_stack
+
+  - name: "Simple function call"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function ==="
+          dump_stack "  "
+      }
+
+      my_function
+
+  - name: "Nested function calls"
+    stdin: |
+      source callstack_helpers.sh
+
+      level3() {
+          echo "=== In level3 ==="
+          dump_stack "  "
+      }
+
+      level2() {
+          echo "=== In level2 ==="
+          dump_stack "  "
+          level3
+      }
+
+      level1() {
+          echo "=== In level1 ==="
+          dump_stack "  "
+          level2
+      }
+
+      level1
+
+  - name: "Function call from sourced script"
+    test_files:
+      - path: "sourced.sh"
+        contents: |
+          sourced_function() {
+              echo "=== In sourced_function ==="
+              dump_stack "  "
+          }
+    stdin: |
+      source callstack_helpers.sh
+
+      source sourced.sh
+      sourced_function
+
+  - name: "Nested sourcing"
+    test_files:
+      - path: "outer.sh"
+        contents: |
+          echo "=== In outer.sh top level ==="
+          dump_stack "  "
+          source inner.sh
+      - path: "inner.sh"
+        contents: |
+          echo "=== In inner.sh top level ==="
+          dump_stack "  "
+
+          inner_func() {
+              echo "=== In inner_func ==="
+              dump_stack "  "
+          }
+
+          inner_func
+    stdin: |
+      source callstack_helpers.sh
+
+      command source outer.sh
+
+  - name: "Command substitution in top level"
+    stdin: |
+      source callstack_helpers.sh
+
+      result=$(dump_stack "  [CmdSub] ")
+      echo "$result"
+
+  - name: "Command substitution in function"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function ==="
+          result=$(dump_stack "  [CmdSub] ")
+          echo "$result"
+      }
+
+      my_function
+
+  - name: "Command substitution invoking function"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function via cmdSub ==="
+          dump_stack "  "
+      }
+
+      result=$(my_function)
+      echo "$result"
+
+  - name: "Nested command substitutions"
+    stdin: |
+      source callstack_helpers.sh
+
+      inner_func() {
+          echo "=== In inner_func ==="
+          dump_stack "  "
+      }
+
+      outer_func() {
+          echo "=== In outer_func ==="
+          result=$(inner_func)
+          echo "$result"
+      }
+
+      final=$(outer_func)
+      echo "$final"
+
+  - name: "eval at top level"
+    stdin: |
+      source callstack_helpers.sh
+
+      eval 'echo "=== In eval ==="; dump_stack "  "'
+
+  - name: "eval in function"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function ==="
+          eval 'echo "=== In eval ==="; dump_stack "  "'
+      }
+
+      my_function
+
+  - name: "eval calling function"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function via eval ==="
+          dump_stack "  "
+      }
+
+      eval 'my_function'
+
+  - name: "Nested evals"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function ==="
+          dump_stack "  "
+      }
+
+      eval 'eval "my_function"'
+
+  - name: "eval with command substitution"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_function() {
+          echo "=== In my_function ==="
+          dump_stack "  "
+      }
+
+      result=$(eval 'my_function')
+      echo "$result"
+
+  - name: "Trap handler - DEBUG"
+    stdin: |
+      source callstack_helpers.sh
+
+      trap_handler() {
+          echo "=== In DEBUG trap handler ==="
+          dump_stack "  "
+      }
+
+      trap 'trap_handler' DEBUG
+
+      echo "Command 1"
+      echo "Command 2"
+
+  - name: "Trap handler - DEBUG in function"
+    stdin: |
+      source callstack_helpers.sh
+
+      trap_handler() {
+          echo "=== In DEBUG trap handler ==="
+          dump_stack "  "
+      }
+
+      trap 'trap_handler' DEBUG
+
+      my_function() {
+          echo "In my_function"
+          echo "Still in my_function"
+      }
+
+      my_function
+
+  - name: "Trap handler - EXIT"
+    stdin: |
+      source callstack_helpers.sh
+
+      trap 'echo "=== In EXIT trap ==="; dump_stack "  "' EXIT
+
+      echo "Main script"
+
+  - name: "Trap handler calling function"
+    stdin: |
+      source callstack_helpers.sh
+
+      trap_function() {
+          echo "=== In trap_function ==="
+          dump_stack "  "
+      }
+
+      trap 'trap_function' EXIT
+
+      echo "Main script"
+
+  - name: "LINENO tracking across contexts"
+    stdin: |
+      echo "Line 1: LINENO=${LINENO}"
+      echo "Line 2: LINENO=${LINENO}"
+
+      my_function() {
+          echo "In function line 1: LINENO=${LINENO}"
+          echo "In function line 2: LINENO=${LINENO}"
+      }
+
+      my_function
+
+      echo "Line 3: LINENO=${LINENO}"
+
+  - name: "LINENO in eval"
+    stdin: |
+      echo "Before eval: LINENO=${LINENO}"
+      eval 'echo "In eval: LINENO=${LINENO}"'
+      echo "After eval: LINENO=${LINENO}"
+
+  - name: "LINENO in command substitution"
+    stdin: |
+      echo "Before cmdSub: LINENO=${LINENO}"
+      result=$(echo "In cmdSub: LINENO=${LINENO}")
+      echo "$result"
+      echo "After cmdSub: LINENO=${LINENO}"
+
+  - name: "LINENO in sourced script"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "Sourced line 1: LINENO=${LINENO}"
+          echo "Sourced line 2: LINENO=${LINENO}"
+
+          sourced_func() {
+              echo "In sourced_func: LINENO=${LINENO}"
+          }
+
+          sourced_func
+    stdin: |
+      echo "Main line 1: LINENO=${LINENO}"
+      source script.sh
+      echo "Main line 2: LINENO=${LINENO}"
+
+  - name: "different depths"
+    stdin: |
+      source callstack_helpers.sh
+
+      level3() {
+          dump_stack
+      }
+
+      level2() {
+          level3
+      }
+
+      level1() {
+          level2
+      }
+
+      level1
+
+  - name: "BASH_SOURCE and FUNCNAME arrays"
+    test_files:
+      - path: "outer.sh"
+        contents: |
+          outer_func() {
+              echo "=== In outer_func ==="
+              echo "  FUNCNAME[@]: ${FUNCNAME[*]}"
+              echo "  BASH_SOURCE[@]: ${BASH_SOURCE[*]}"
+              source inner.sh
+          }
+      - path: "inner.sh"
+        contents: |
+          inner_func() {
+              echo "=== In inner_func ==="
+              echo "  FUNCNAME[@]: ${FUNCNAME[*]}"
+              echo "  BASH_SOURCE[@]: ${BASH_SOURCE[*]}"
+          }
+
+          inner_func
+    stdin: |
+      source outer.sh
+      outer_func
+
+  - name: "Mixed: eval in sourced function with command substitution"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          script_func() {
+              echo "=== In script_func ==="
+              result=$(eval 'dump_stack "  [Eval->CmdSub] "')
+              echo "$result"
+          }
+    stdin: |
+      source callstack_helpers.sh
+
+      source script.sh
+      script_func
+
+  - name: "Complex nesting: function -> eval -> cmdSub -> function"
+    stdin: |
+      source callstack_helpers.sh
+
+      inner_func() {
+          echo "=== In inner_func ==="
+          dump_stack "  "
+      }
+
+      outer_func() {
+          echo "=== In outer_func ==="
+          eval 'result=$(inner_func); echo "$result"'
+      }
+
+      outer_func
+
+  # Tests with -c flag
+  - name: "Call stack with -c flag"
+    args:
+      ["-c", "source callstack_helpers.sh; echo '=== Via -c ==='; dump_stack"]
+
+  - name: "Function call with -c flag"
+    args:
+      [
+        "-c",
+        "my_func() { echo '=== In my_func via -c ==='; dump_stack; }; source callstack_helpers.sh; my_func",
+      ]
+
+  - name: "Nested functions with -c flag"
+    args:
+      [
+        "-c",
+        "f2() { echo 'In f2'; dump_stack; }; f1() { echo 'In f1'; f2; }; source callstack_helpers.sh; f1",
+      ]
+
+  - name: "eval with -c flag"
+    args:
+      [
+        "-c",
+        "eval 'source callstack_helpers.sh; echo In eval via -c; dump_stack'",
+      ]
+
+  - name: "Command substitution with -c flag"
+    args:
+      [
+        "-c",
+        "source callstack_helpers.sh; result=$(echo LINENO=${LINENO}; dump_stack); echo $result",
+      ]
+
+  # Interactive mode tests
+  - name: "Interactive mode - simple function"
+    known_failure: true # TODO(LINENO): implement accurate interactive mode tracking
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      source callstack_helpers.sh
+
+      f() { dump_stack; }
+      f
+
+  - name: "Interactive mode - FUNCNAME and BASH_SOURCE"
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      f() { echo "FUNCNAME: ${FUNCNAME[@]}"; echo "BASH_SOURCE: ${BASH_SOURCE[@]}"; }
+      f
+
+  # PROMPT_COMMAND tests
+  - name: "PROMPT_COMMAND with call stack"
+    known_failure: true # TODO(LINENO): implement accurate PROMPT_COMMAND line tracking
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      source callstack_helpers.sh
+
+      PROMPT_COMMAND='dump_stack "[PC] "'
+      echo test
+
+  - name: "PROMPT_COMMAND calling function"
+    known_failure: true # TODO(LINENO): implement accurate PROMPT_COMMAND line tracking
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      source callstack_helpers.sh
+
+      pc_func() { echo "[PC_FUNC] In function"; dump_stack; }
+      PROMPT_COMMAND='pc_func'
+      echo test
+
+  - name: "PROMPT_COMMAND with nested calls"
+    known_failure: true # TODO(LINENO): implement accurate PROMPT_COMMAND line tracking
+    args: ["-i"]
+    ignore_stderr: true
+    stdin: |
+      source callstack_helpers.sh
+
+      inner() { dump_stack; }
+      outer() { inner; }
+      PROMPT_COMMAND='outer'
+      echo test
+
+  # Additional edge cases
+  - name: "Recursive function call stack"
+    stdin: |
+      source callstack_helpers.sh
+
+      recursive_func() {
+          local depth=$1
+          echo "=== Depth $depth ==="
+          
+          if [ $depth -gt 0 ]; then
+              recursive_func $((depth - 1))
+          else
+              dump_stack "  "
+          fi
+      }
+
+      recursive_func 3
+
+  - name: "Call stack with process substitution"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func ==="
+          dump_stack "  "
+      }
+
+      # Process substitution context
+      cat <(my_func)
+
+  - name: "Call stack across pipe"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func ==="
+          dump_stack "  "
+      }
+
+      my_func | cat
+
+  - name: "Call stack in subshell"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func (subshell) ==="
+          dump_stack "  "
+      }
+
+      (my_func)
+
+  - name: "Call stack with background job"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func (background) ==="
+          dump_stack "  "
+      }
+
+      my_func &
+      wait
+
+  - name: "BASH_SOURCE indexing"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "In script.sh"
+          echo "  BASH_SOURCE[0]: ${BASH_SOURCE[0]}"
+          echo "  BASH_SOURCE[1]: ${BASH_SOURCE[1]}"
+
+          script_func() {
+              echo "In script_func"
+              echo "  BASH_SOURCE[0]: ${BASH_SOURCE[0]}"
+              echo "  BASH_SOURCE[1]: ${BASH_SOURCE[1]}"
+              echo "  BASH_SOURCE[2]: ${BASH_SOURCE[2]}"
+          }
+
+          script_func
+    stdin: |
+      echo "Main script"
+      echo "  BASH_SOURCE[0]: ${BASH_SOURCE[0]}"
+      source script.sh
+
+  - name: "BASH_SOURCE includes the outer script when sourcing at top level"
+    test_files:
+      - path: "source.bash"
+        contents: |
+          source test.bash
+      - path: "test.bash"
+        contents: |
+          echo "${BASH_SOURCE[0]}"
+          echo "${BASH_SOURCE[1]}"
+          echo "${BASH_SOURCE[*]}"
+    args: ["./source.bash"]
+
+  - name: "FUNCNAME at top level"
+    stdin: |
+      echo "Top level FUNCNAME: '${FUNCNAME}'"
+      echo "Top level FUNCNAME[@]: '${FUNCNAME[@]}'"
+      echo "Top level FUNCNAME[*]: '${FUNCNAME[*]}'"
+
+  - name: "Empty BASH_LINENO at top level"
+    stdin: |
+      echo "Top level BASH_LINENO[@]: '${BASH_LINENO[@]}'"
+      echo "Top level BASH_LINENO[*]: '${BASH_LINENO[*]}'"
+
+  - name: "Call stack in trap with function call"
+    stdin: |
+      source callstack_helpers.sh
+
+      trap_func() {
+          echo "=== In trap_func ==="
+          dump_stack "  "
+      }
+
+      my_func() {
+          echo "=== In my_func ==="
+          echo "About to trigger trap"
+      }
+
+      trap 'trap_func' DEBUG
+      my_func
+
+  - name: "Call stack: source within eval within function"
+    test_files:
+      - path: "script.sh"
+        contents: |
+          echo "=== In sourced script ==="
+          dump_stack "  "
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func ==="
+          eval 'source script.sh'
+      }
+
+      my_func
+
+  - name: "Multiple eval levels"
+    stdin: |
+      source callstack_helpers.sh
+
+      my_func() {
+          echo "=== In my_func ==="
+          dump_stack "  "
+      }
+
+      eval 'eval "eval \"my_func\""'
+
+  - name: "LINENO persistence in function"
+    stdin: |
+      my_func() {
+          local line1=${LINENO}
+          local line2=${LINENO}
+          local line3=${LINENO}
+          echo "line1: $line1"
+          echo "line2: $line2"
+          echo "line3: $line3"
+      }
+
+      my_func
