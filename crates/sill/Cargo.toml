@@ -1,0 +1,25 @@
+[package]
+name = "sill"
+version = "0.2.0"
+description = "Agent-first Bash runtime for native Windows (drop-in bash.exe)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Two names, one program: `bash` is the drop-in name harnesses look for.
+[[bin]]
+name = "sill"
+path = "src/main.rs"
+
+[[bin]]
+name = "bash"
+path = "src/bin/bash.rs"
+
+[dependencies]
+# Non-interactive backends only: agents pipe or pass commands, no line editor needed.
+# (`basic` is offered on Unix; Windows uses `minimal`.)
+brush-shell = { path = "../../third_party/brush/brush-shell", default-features = false, features = ["basic", "minimal", "experimental-bundled-coreutils"] }
+
+[target.'cfg(windows)'.dependencies]
+# The invisible console (src/lib.rs `console`); same version as brush-core's.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_LibraryLoader"] }

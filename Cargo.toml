@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/sill", "crates/sill-errno", "crates/sill-winargs"]
+# The vendored brush tree is its own workspace; crates/sill uses it by path.
+exclude = ["third_party"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows-sys = "0.60"
+
+# sill: findutils with `-exec` paths in `/` form on Windows (third_party/findutils).
+[patch.crates-io]
+findutils = { path = "third_party/findutils" }
+# sill: uucore with POSIX wording for Windows errors (third_party/uucore).
+uucore = { path = "third_party/uucore" }

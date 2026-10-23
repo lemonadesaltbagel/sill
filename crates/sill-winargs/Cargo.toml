@@ -1,0 +1,11 @@
+[package]
+name = "sill-winargs"
+version = "0.1.0"
+description = "Encode an argv array into a Windows command line (CRT rules for .exe, cmd.exe rules for .bat/.cmd)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true

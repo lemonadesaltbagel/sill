@@ -1,0 +1,5 @@
+# Same toolchain as the vendored brush (third_party/brush/rust-toolchain.toml), so both
+# workspaces build with one compiler and can share a target directory.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

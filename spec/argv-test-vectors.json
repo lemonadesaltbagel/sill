@@ -1,0 +1,845 @@
+{
+  "schema": "sill/argv-test-vectors/v1",
+  "generated": "2026-10-20",
+  "encoder_spec": "crates/sill-winargs/src/lib.rs (module docs)",
+  "conventions": {
+    "exe": "expected_cmdline is lpCommandLine for CreateProcessW with lpApplicationName = resolved absolute path of argv[0]. expected_reparse_crt is argv as parsed by the UCRT startup code (post-2008 rules); for every exe vector the pre-2008 msvcrt rule and CommandLineToArgvW give the same result because the encoder never emits a doubled quote and never starts with whitespace.",
+    "bat": "expected_cmdline is lpCommandLine; lpApplicationName = %SystemRoot%\\System32\\cmd.exe. argv[0] is the resolved script path. expected_reparse_via_shim_forwarding is argv[1:] seen by a UCRT program when the batch file forwards %* verbatim (the npm.cmd/yarn.cmd shim pattern), under a simplified model of cmd.exe phase-1 percent expansion; it is NOT what %~1 inside the batch yields for args containing quotes.",
+    "argv_generator": "when present, argv[index] is replaced by char*count before encoding",
+    "argv_hex": "when present, argv[i] is the raw byte string given in hex (non-UTF-8 input)"
+  },
+  "vectors": [
+    {
+      "name": "exe_no_args",
+      "argv": [
+        "C:\\tools\\echoargs.exe"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe"
+      ],
+      "notes": "Program name is always quoted (Rust make_command_line); argv0 is never escaped."
+    },
+    {
+      "name": "exe_simple",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "hello"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" hello",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "hello"
+      ],
+      "notes": "No metacharacters: emitted verbatim."
+    },
+    {
+      "name": "exe_empty_arg",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        ""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        ""
+      ],
+      "notes": "Empty arg must be quoted or it disappears."
+    },
+    {
+      "name": "exe_two_empty_args",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "",
+        ""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"\" \"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "",
+        ""
+      ],
+      "notes": "Each empty arg becomes \"\"."
+    },
+    {
+      "name": "exe_space",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "hello world"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"hello world\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "hello world"
+      ],
+      "notes": "Space triggers quoting."
+    },
+    {
+      "name": "exe_tab",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\tb"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a\tb\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a\tb"
+      ],
+      "notes": "Tab is a CRT delimiter; triggers quoting."
+    },
+    {
+      "name": "exe_leading_trailing_spaces",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "  lead and trail  "
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"  lead and trail  \"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "  lead and trail  "
+      ],
+      "notes": "Whitespace preserved inside quotes."
+    },
+    {
+      "name": "exe_embedded_quotes",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "say \"hi\""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"say \\\"hi\\\"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "say \"hi\""
+      ],
+      "notes": "Embedded quote -> \\\" (never \"\", so pre-2008 msvcrt and UCRT agree)."
+    },
+    {
+      "name": "exe_lone_quote",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "\""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"\\\"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "\""
+      ],
+      "notes": "Single quote char."
+    },
+    {
+      "name": "exe_quote_no_space",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\"b"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a\\\"b\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a\"b"
+      ],
+      "notes": "Rust Auto mode emits a\\\"b unquoted; we quote whenever '\"' is present (Colascione set). Both parse identically."
+    },
+    {
+      "name": "exe_backslash_mid_no_quote",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\Program Files\\x"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"C:\\Program Files\\x\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\Program Files\\x"
+      ],
+      "notes": "Backslashes not followed by a quote are literal; not doubled."
+    },
+    {
+      "name": "exe_trailing_backslash_with_space",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\dir with space\\"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"C:\\dir with space\\\\\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\dir with space\\"
+      ],
+      "notes": "Trailing backslash doubled because a closing quote follows (classic bug: \"C:\\dir\\\" eats the quote)."
+    },
+    {
+      "name": "exe_trailing_backslash_no_space",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\dir\\"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" C:\\dir\\",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "C:\\dir\\"
+      ],
+      "notes": "No quoting needed, so trailing backslash stays single."
+    },
+    {
+      "name": "exe_trailing_two_backslashes_quoted",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a b\\\\"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a b\\\\\\\\\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a b\\\\"
+      ],
+      "notes": "2 trailing backslashes -> 4 before closing quote."
+    },
+    {
+      "name": "exe_backslash_before_quote",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\\\"b"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a\\\\\\\"b\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a\\\"b"
+      ],
+      "notes": "n=1 backslash before quote -> 2n+1=3 backslashes + quote."
+    },
+    {
+      "name": "exe_two_backslashes_before_quote",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\\\\\"b"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a\\\\\\\\\\\"b\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a\\\\\"b"
+      ],
+      "notes": "n=2 -> 5 backslashes + quote."
+    },
+    {
+      "name": "exe_only_backslashes",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \\\\",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\"
+      ],
+      "notes": "Unquoted, literal."
+    },
+    {
+      "name": "exe_unc_with_space",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\server\\share\\my file.txt"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"\\\\server\\share\\my file.txt\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\server\\share\\my file.txt"
+      ],
+      "notes": "Leading \\\\ is literal (no quote follows)."
+    },
+    {
+      "name": "exe_unicode_bmp",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "héllo wörld",
+        "日本語"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"héllo wörld\" 日本語",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "héllo wörld",
+        "日本語"
+      ],
+      "notes": "Encoder works on UTF-16 code units; non-ASCII never needs escaping."
+    },
+    {
+      "name": "exe_unicode_astral",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "😀 x"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"😀 x\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "😀 x"
+      ],
+      "notes": "Surrogate pair passes through untouched."
+    },
+    {
+      "name": "exe_newline",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "line1\nline2"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"line1\nline2\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "line1\nline2"
+      ],
+      "notes": "CRT treats LF as ordinary char; we quote anyway (Colascione set) for robustness with non-CRT parsers."
+    },
+    {
+      "name": "exe_vertical_tab",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\u000bb"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"a\u000bb\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a\u000bb"
+      ],
+      "notes": "VT quoted per Colascione set."
+    },
+    {
+      "name": "exe_glob_star",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "*.txt"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"*.txt\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "*.txt"
+      ],
+      "notes": "Quoted so MSVC setargv.obj / MinGW _dowildcard globbing in the child does not re-expand a literal '*' that bash semantics already decided is literal."
+    },
+    {
+      "name": "exe_glob_question",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "file?.log"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"file?.log\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "file?.log"
+      ],
+      "notes": "Same as above for '?'."
+    },
+    {
+      "name": "exe_msbuild_slash_option",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "/p:Configuration=Release",
+        "/m",
+        "/nologo"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" /p:Configuration=Release /m /nologo",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "/p:Configuration=Release",
+        "/m",
+        "/nologo"
+      ],
+      "notes": "Slash options must pass byte-for-byte (no MSYS-style path conversion)."
+    },
+    {
+      "name": "exe_cl_options",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "/EHsc",
+        "/Fe:out dir\\a.exe",
+        "/DNAME=\"v\""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" /EHsc \"/Fe:out dir\\a.exe\" \"/DNAME=\\\"v\\\"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "/EHsc",
+        "/Fe:out dir\\a.exe",
+        "/DNAME=\"v\""
+      ],
+      "notes": "cl.exe options; '/Fe:out dir' quoted, embedded quotes escaped."
+    },
+    {
+      "name": "exe_unix_looking_path",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "--prefix=/usr",
+        "/tmp/x"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" --prefix=/usr /tmp/x",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "--prefix=/usr",
+        "/tmp/x"
+      ],
+      "notes": "Never rewritten at the argv layer (path translation is an explicit, typed operation elsewhere)."
+    },
+    {
+      "name": "exe_cmd_metachars",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a&b|c<d>e^f%PATH%!x!"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" a&b|c<d>e^f%PATH%!x!",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "a&b|c<d>e^f%PATH%!x!"
+      ],
+      "notes": "For a direct exe target cmd.exe is not involved: & | < > ^ % ! are ordinary characters."
+    },
+    {
+      "name": "exe_single_quotes",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "it's"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" it's",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "it's"
+      ],
+      "notes": "Single quote is not special to the CRT (but IS to Cygwin/MSYS children; see msys profile)."
+    },
+    {
+      "name": "exe_program_with_spaces",
+      "argv": [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "--version"
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\Program Files\\Git\\cmd\\git.exe\" --version",
+      "expected_reparse_crt": [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "--version"
+      ],
+      "notes": "Program path with spaces is quoted; CreateProcess also gets lpApplicationName so no Program.exe ambiguity."
+    },
+    {
+      "name": "exe_mixed_complex",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\\"",
+        "x y\\",
+        "\"",
+        "\\",
+        ""
+      ],
+      "target_kind": "exe",
+      "expected_cmdline": "\"C:\\tools\\echoargs.exe\" \"\\\\\\\\\\\"\" \"x y\\\\\" \"\\\"\" \\ \"\"",
+      "expected_reparse_crt": [
+        "C:\\tools\\echoargs.exe",
+        "\\\\\"",
+        "x y\\",
+        "\"",
+        "\\",
+        ""
+      ],
+      "notes": "Mixed edge cases in one command line."
+    },
+    {
+      "name": "bat_simple",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "hello"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" hello\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "hello"
+      ],
+      "notes": "cmd.exe /e:ON /v:OFF /d /c \"<line>\" wrapper (Rust std form). /d skips AutoRun."
+    },
+    {
+      "name": "bat_empty",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        ""
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        ""
+      ],
+      "notes": "Empty arg quoted."
+    },
+    {
+      "name": "bat_space",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "hello world"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"hello world\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "hello world"
+      ],
+      "notes": "Quoted."
+    },
+    {
+      "name": "bat_ampersand",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a&b"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"a&b\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "a&b"
+      ],
+      "notes": "Any ASCII punctuation outside the safe set #$*+-./:?@\\_ forces quoting; & inside quotes is literal to cmd."
+    },
+    {
+      "name": "bat_pipe_redirect",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a|b",
+        "<in",
+        ">out"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"a|b\" \"<in\" \">out\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "a|b",
+        "<in",
+        ">out"
+      ],
+      "notes": "| < > quoted."
+    },
+    {
+      "name": "bat_caret",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "^"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"^\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "^"
+      ],
+      "notes": "Inside quotes ^ is literal."
+    },
+    {
+      "name": "bat_percent_var",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "%PATH%"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"%%cd:~,%PATH%%cd:~,%\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "%PATH%"
+      ],
+      "notes": "% -> %%cd:~,% (yt-dlp/Rust hack): '%' then empty substring of %cd%, so no variable can form."
+    },
+    {
+      "name": "bat_percent_trailing",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "100%"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"100%%cd:~,%\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "100%"
+      ],
+      "notes": "Lone percent."
+    },
+    {
+      "name": "bat_bang_delayed",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "!USERNAME!"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"!USERNAME!\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "!USERNAME!"
+      ],
+      "notes": "Outer cmd has /v:OFF so ! is literal there. UNSAFE if the .bat itself does setlocal EnableDelayedExpansion and expands %1: cannot be fixed by the caller."
+    },
+    {
+      "name": "bat_embedded_quote",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a\"b"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"a\"\"b\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "a\"b"
+      ],
+      "notes": "Quote doubled; %* forwarded to a UCRT exe re-parses to a\"b. msvcrt.dll (pre-2008 rule) children may mis-split."
+    },
+    {
+      "name": "bat_injection_attempt",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "\"&calc.exe"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"\"\"&calc.exe\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "\"&calc.exe"
+      ],
+      "notes": "Quote parity stays even, & stays inside a quoted region -> no command injection."
+    },
+    {
+      "name": "bat_trailing_backslash",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "C:\\dir\\"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"C:\\dir\\\\\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "C:\\dir\\"
+      ],
+      "notes": "Ends with \\ -> quoted and backslash doubled so \"%~1\" in the bat does not escape the closing quote."
+    },
+    {
+      "name": "bat_backslash_quote",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a\\\"b"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"a\\\\\"\"b\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "a\\\"b"
+      ],
+      "notes": "n backslashes before internal quote -> 2n, then doubled quote."
+    },
+    {
+      "name": "bat_comma_semicolon_equals",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "x,y",
+        "a;b",
+        "k=v"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"x,y\" \"a;b\" \"k=v\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "x,y",
+        "a;b",
+        "k=v"
+      ],
+      "notes": ", ; = are %1 delimiters in batch argument splitting; quoting keeps them in one arg."
+    },
+    {
+      "name": "bat_parens",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "(x)"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"(x)\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "(x)"
+      ],
+      "notes": "Parentheses quoted (they break if/for blocks inside the bat)."
+    },
+    {
+      "name": "bat_unicode",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "日本語"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" 日本語\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "日本語"
+      ],
+      "notes": "Non-ASCII not quoted; note the .bat's own code page (chcp) affects how it echoes text, not argument passing."
+    },
+    {
+      "name": "bat_safe_chars",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "-flag",
+        "C:\\path\\file.txt",
+        "a+b@c:d$e#f*g?h"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" -flag C:\\path\\file.txt a+b@c:d$e#f*g?h\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "-flag",
+        "C:\\path\\file.txt",
+        "a+b@c:d$e#f*g?h"
+      ],
+      "notes": "Safe set stays unquoted."
+    },
+    {
+      "name": "bat_tab",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a\tb"
+      ],
+      "target_kind": "bat",
+      "expected_cmdline": "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\tools\\shim.bat\" \"a\tb\"\"",
+      "lpApplicationName": "%SystemRoot%\\System32\\cmd.exe",
+      "expected_reparse_via_shim_forwarding_%*_to_ucrt_exe": [
+        "a\tb"
+      ],
+      "notes": "Control chars force quoting."
+    },
+    {
+      "name": "exe_reject_nul",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "a\u0000b"
+      ],
+      "target_kind": "exe",
+      "expected_error": "NUL in argument",
+      "notes": "NUL cannot be represented in a Windows command line."
+    },
+    {
+      "name": "exe_reject_quote_in_program",
+      "argv": [
+        "C:\\a\"b.exe",
+        "x"
+      ],
+      "target_kind": "exe",
+      "expected_error": "program name may not contain '\"' or NUL",
+      "notes": "argv0 has no escape mechanism; Windows file names cannot contain '\"'."
+    },
+    {
+      "name": "exe_reject_empty_program",
+      "argv": [
+        "",
+        "x"
+      ],
+      "target_kind": "exe",
+      "expected_error": "empty program name",
+      "notes": "No program."
+    },
+    {
+      "name": "exe_reject_too_long",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "<generated>"
+      ],
+      "target_kind": "exe",
+      "argv_generator": {
+        "index": 1,
+        "char": "a",
+        "count": 32767
+      },
+      "expected_error": "command line exceeds 32767 UTF-16 units",
+      "notes": "Command line > 32,767 UTF-16 units (CreateProcessW limit). Use a response file (@file) if the tool supports it."
+    },
+    {
+      "name": "exe_reject_invalid_utf8",
+      "argv": [
+        "C:\\tools\\echoargs.exe",
+        "<bytes>"
+      ],
+      "target_kind": "exe",
+      "argv_hex": [
+        null,
+        "fffe"
+      ],
+      "expected_error": "argument is not valid UTF-8",
+      "notes": "Interpreter strings are bytes; bytes that are not valid UTF-8 (here 0xFF 0xFE) cannot be converted to UTF-16 without loss -> error (do not lossy-replace with U+FFFD)."
+    },
+    {
+      "name": "bat_reject_newline",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a\nb"
+      ],
+      "target_kind": "bat",
+      "expected_error": "CR/LF in batch argument",
+      "notes": "LF terminates the cmd.exe command; would truncate/inject. Rust std also rejects."
+    },
+    {
+      "name": "bat_reject_cr",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "a\rb"
+      ],
+      "target_kind": "bat",
+      "expected_error": "CR/LF in batch argument",
+      "notes": "CR rejected (Rust std)."
+    },
+    {
+      "name": "bat_reject_quote_in_script",
+      "argv": [
+        "C:\\x\"y.bat",
+        "a"
+      ],
+      "target_kind": "bat",
+      "expected_error": "Windows file names may not contain '\"' or end with '\\'",
+      "notes": "Script name may not contain '\"'."
+    },
+    {
+      "name": "bat_reject_trailing_backslash_script",
+      "argv": [
+        "C:\\dir\\",
+        "a"
+      ],
+      "target_kind": "bat",
+      "expected_error": "Windows file names may not contain '\"' or end with '\\'",
+      "notes": "Script name may not end with '\\'."
+    },
+    {
+      "name": "bat_reject_too_long",
+      "argv": [
+        "C:\\tools\\shim.bat",
+        "<generated>"
+      ],
+      "target_kind": "bat",
+      "argv_generator": {
+        "index": 1,
+        "char": "a",
+        "count": 8200
+      },
+      "expected_error": "command line exceeds cmd.exe 8191-char limit",
+      "notes": "cmd.exe command line limit is 8191 chars."
+    }
+  ]
+}

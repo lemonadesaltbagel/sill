@@ -1,0 +1,16 @@
+diff --git a/editors/sed.c b/editors/sed.c
+index b9e2c40..066e29e 100644
+--- a/editors/sed.c
++++ b/editors/sed.c
+@@ -1600,8 +1600,9 @@ int sed_main(int argc UNUSED_PARAM, char **argv)
+ 	//if (opt & 8)
+ 	//	G.be_quiet++; // -n (implemented with a counter instead)
+ #if ENABLE_PLATFORM_MINGW32
+-	if (opt & 0x40)
+-		G.keep_cr = 1;
++	/* sill: keep CR like GNU sed, so editing a CRLF file in place doesn't turn it
++	 * into LF (every line would show as changed). -b is still accepted. */
++	G.keep_cr = 1;
+ #endif
+ 	while (opt_e) { // -e
+ 		add_cmd_block(llist_pop(&opt_e));
