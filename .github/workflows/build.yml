@@ -1,0 +1,121 @@
+name: build
+
+# Builds sill for Windows and checks it: the bundled tools (cross-built on Linux), sill's
+# tests on windows-2025, the packaged zip, and the distribution checks on a PATH with only
+# Windows' own directories. A pushed tag vX.Y.Z also publishes the zip as that release,
+# with its CHANGELOG section as the notes.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: never
+  PYTHONUTF8: "1"
+  # One target dir for both workspaces (root and third_party/brush).
+  CARGO_TARGET_DIR: ${{ github.workspace }}\target
+
+jobs:
+  tools:
+    name: Bundled tools (busybox-w32, GNU grep/sed/diffutils/make, ripgrep, jq)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: mingw-w64
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64 >/dev/null
+      - name: busybox-w32
+        run: scripts/build-busybox.sh busybox.exe
+      - name: GNU tools
+        run: scripts/build-gnu-tools.sh gnu
+      - name: ripgrep and jq (pinned, checksummed)
+        run: scripts/fetch-tools.sh gnu
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tools
+          path: |
+            busybox.exe
+            gnu/*.exe
+
+  windows:
+    name: sill on Windows (tests, package, distribution checks)
+    needs: tools
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup toolchain install --profile minimal
+      - name: sill's tests
+        run: cargo test --release -p sill -p sill-winargs -p sill-errno
+      - name: Unit tests of the Windows layer
+        working-directory: third_party/brush
+        run: cargo test --release -p brush-core -p brush-builtins --lib -- "sys::" "ulimit_windows"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tools
+          path: ${{ runner.temp }}\tools
+      - name: Package
+        shell: pwsh
+        run: pwsh scripts/package-windows.ps1 -Release target\release -Out dist -Busybox "$env:RUNNER_TEMP\tools\busybox.exe" -GnuTools "$env:RUNNER_TEMP\tools\gnu"
+      - name: Distribution checks (no Git on PATH)
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          dist\sill\bash.exe --version
+          dist\sill\bash.exe scripts/dist-check.sh 2>&1 | Tee-Object dist-check.txt
+          if ($LASTEXITCODE -ne 0) { throw "dist-check failed" }
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash -Algorithm SHA256 dist\sill-windows-x64.zip).Hash.ToLower()
+          "$h  sill-windows-x64.zip" | Set-Content -NoNewline dist\sill-windows-x64.zip.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sill-windows-x64
+          path: |
+            dist/sill-windows-x64.zip
+            dist/sill-windows-x64.zip.sha256
+            dist-check.txt
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sill-windows-x64
+          path: out
+      - name: Release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          awk -v v="$version" '$0 ~ "^## " v "( |$)" {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "no CHANGELOG section for $version"; exit 1; }
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "sill ${TAG#v}" --notes-file notes.md \
+            out/dist/sill-windows-x64.zip out/dist/sill-windows-x64.zip.sha256 scripts/install-windows.ps1

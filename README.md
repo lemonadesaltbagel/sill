@@ -1,0 +1,144 @@
+# sill
+
+**Bash for coding agents on native Windows.** sill is a drop-in `bash.exe`: a Bash interpreter (a fork of [brush](https://github.com/reubeno/brush)) with a Windows adapter built for the way agents run commands. It needs no Git, MSYS2 or WSL. Point Claude Code, opencode or Codex at it, and the agent's shell commands behave the way the model expects from Linux, on Windows' own programs and files.
+
+## Why
+
+An agent on Windows loses most of its failed commands at the boundary between the shell and Windows, not in its own reasoning:
+
+- **Arguments:** `*` and quotes get re-expanded or mangled on their way to `.exe` and `.bat` programs.
+- **Paths:** `/c/...` and `C:\...` forms get mixed up.
+- **Encoding:** non-English text turns to mojibake.
+- **Console windows:** one flashes up per command.
+- **Background servers:** they hold the harness's output pipe until it times out.
+- **Missing tools:** `make`, `rg`, `ps`, `lsof` aren't there.
+
+sill takes each of these on directly, with a test for each.
+
+## Results
+
+All measured on Windows 11 with the Git Bash that ships with Git for Windows as the comparison.
+
+**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 56 cases covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
+
+| | sill | Git Bash |
+|---|---|---|
+| GitHub's `windows-2025` runner (en-US) | **56/56** | 43/56 |
+| A Chinese-locale laptop (code page 936) | **56/56** | 39/56 |
+
+**Real agents, end to end:** 18 tasks with automatic checks, run with DeepSeek's low-cost model. The tasks include a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, and an MSVC build. Two runs per task on the Chinese-locale laptop:
+
+| harness | sill | Git Bash | PowerShell |
+|---|---|---|---|
+| Claude Code | 34/36 passed, **1** failed call of 120, **493 s** | 35/36, 8 of 154, 637 s | 35/36, 9 of 141, 777 s |
+| opencode | **35/36**, **3** of 104, **403 s** | 35/36, 18 of 149, 622 s | 29/36, 15 of 132, 904 s |
+| Codex CLI | **36/36**, **6** of 136, **634 s** | 36/36, 22 of 172, 846 s | 35/36, 44 of 208, 1094 s |
+
+The pass counts are close. The difference is in the failed calls and the time it took to get there.
+
+**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,177 of 2,911 runnable cases. Most of the remainder are features brush doesn't have yet on any platform: namerefs (`declare -n`) alone are 207 cases.
+
+## Install
+
+1. Download `sill-windows-x64.zip` and `install-windows.ps1` from the [latest release](../../releases/latest).
+2. In PowerShell, run:
+
+       powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Zip sill-windows-x64.zip -AddToPath -ClaudeCode
+
+The installer unpacks to `%LOCALAPPDATA%\Programs\sill`. The options:
+- `-AddToPath` puts sill on your user PATH.
+- `-ClaudeCode` points Claude Code's Bash tool at sill, in `~\.claude\settings.json`. Your other settings are kept, and the old file is saved as `settings.json.bak`.
+
+Nothing else on the machine is changed.
+
+### With an agent harness
+
+| harness | how |
+|---|---|
+| Claude Code | `CLAUDE_CODE_GIT_BASH_PATH` = `...\sill\bash.exe` (what `-ClaudeCode` sets) |
+| opencode | `SHELL` = `...\sill\bash.exe` |
+| Codex CLI | Codex starts bash only when the model asks for `shell: "bash"`. Put sill first on PATH and ask for bash in `AGENTS.md` |
+
+## What's inside
+
+**Running programs**
+- **Exact arguments:** command lines are encoded for each target, using the C runtime's rules for `.exe` and cmd.exe's rules for `.bat`/`.cmd`. `*` and `?` arrive as typed.
+- **Long argument lists:** sill's own tools and the bundled GNU tools accept any number of arguments, past Windows' 32,767-character limit, through an args file. Other programs that hit the limit fail with "Argument list too long" and a note on what to use instead.
+- **`#!` scripts** run through their interpreter: `./build.sh`, `./gradlew`, `#!/usr/bin/env python3`. `sh` is sill.
+- **`cmd /c '... >nul'`:** Claude Code rewrites `>nul` to `>/dev/null`; sill reads that back as `nul`.
+- **`exec`** runs the program and exits with its status, so wrapper scripts work.
+- **Background jobs** (`server > log 2>&1 &`) don't hold the harness's output pipe. `kill`, `pkill` and `killall` end whole process trees, but never the harness or the Windows session's processes.
+
+**Paths and text**
+- **Paths:** `$PWD`, `~`, `$HOME` and `$TMPDIR` use `C:/...` form, and `/c/...` and `/tmp` work wherever the shell opens a file. Arguments to other programs are never rewritten.
+- **No console windows:** a shell started without a console, as Claude Code starts it, gets one invisible UTF-8 console. No window opens per command, and Windows' messages arrive readable.
+- **Error messages:** system errors use POSIX wording ("No such file or directory"), not Windows' sentence in the user's language.
+- **git** prints non-ASCII paths unescaped.
+
+**Bash behavior**
+- `trap ... EXIT INT TERM`, process substitution (`diff <(a) <(b)`), `read -t`, `ulimit`, `$OSTYPE=msys`.
+- `$EUID` is a regular user's, even when elevated, as in Git Bash.
+
+**Package managers:** npm, npx, yarn and pnpm run `package.json` scripts in sill, unless you've configured a script shell. Scripts that look written for cmd.exe get a one-line note.
+
+**Visual C++:** `msvc-env [arch]` loads Visual Studio's C/C++ environment into the shell, cached: about 55 ms against 2 s for `vcvars64.bat`.
+
+**Bundled tools (all native Windows programs):**
+- **Built into sill:** the coreutils (uutils) and `find` (uutils findutils, printing `/` paths, also for `-exec`).
+- **GNU builds:** grep, sed, diffutils and make, with a UTF-8 code page, so any file name works.
+- **Others:** ripgrep, jq, and busybox-w32 for awk, xargs, patch, gzip and the rest.
+- **For Windows:** `ps`, `pgrep`, `pkill`, `killall`, `kill`, `lsof` (files and ports), `file`, `cygpath`, `nohup` and `setsid`.
+
+**Defaults for agents:**
+- UTF-8 Python.
+- No pagers, prompts or update notices.
+- Telemetry off.
+- English .NET and MSBuild messages.
+
+A value you've already set is kept. All of these are visible with `env`.
+
+### Settings
+
+| variable | effect |
+|---|---|
+| `SILL_NO_ENV_DEFAULTS=1` | Turns the defaults above off, and English for sill's own messages too |
+| `LANG`, `LC_ALL`, `LC_MESSAGES` | A language other than English keeps sill's own messages in it |
+| `SILL_CONSOLE_CP` | The code page of the invisible console (default 65001, UTF-8) |
+| `SILL_TRACE=<file>` | Appends each invocation's arguments and working directory to the file, one JSON line each |
+
+## Known limits
+
+- **Windows has no signals.** Traps for INT and TERM are accepted and listed, but only `EXIT`, `ERR`, `DEBUG` and `RETURN` run. `kill` ends processes.
+- **Unsupported:** `coproc`, stopped jobs (`fg` after Ctrl+Z), passing descriptors above 2 to a program, `exec -a`, and `cp <(cmd) file`.
+- **Process substitution** passes a named pipe (`\\.\pipe\...`), which programs open like a file.
+- **Elevation:** when sill runs elevated, network drives mapped in your normal session aren't visible to it, as for any elevated program.
+- **No `sudo`, `apt` or `systemctl`:** sill doesn't emulate Linux administration. These commands fail with a note naming the Windows way.
+
+## Build from source
+
+You need a Windows machine with Rust (the version in `rust-toolchain.toml`) and Visual Studio's C++ tools:
+
+    cargo build --release -p sill
+
+This gives `target\release\bash.exe`. The bundled tools are cross-built on Linux with mingw-w64:
+- `scripts/build-busybox.sh`
+- `scripts/build-gnu-tools.sh`
+- `scripts/fetch-tools.sh` (pinned and checksummed)
+
+`scripts/package-windows.ps1` assembles the zip, and `scripts/dist-check.sh` checks it on a PATH with only Windows' own directories. `.github/workflows/build.yml` runs all of this, and publishes a release for a `v*` tag.
+
+## Layout
+
+| path | what |
+|---|---|
+| `crates/sill` | The app: `bash.exe` and `sill.exe`, the console and environment setup, and the tests that replay Claude Code's shell contract |
+| `crates/sill-winargs` | argv to Windows command line, checked against `spec/argv-test-vectors.json` |
+| `crates/sill-errno` | POSIX wording for Windows error codes |
+| `third_party/brush` | The Bash interpreter, vendored; sill's changes are marked `sill:` |
+| `third_party/findutils`, `third_party/uucore` | uutils crates, vendored for small changes, marked `sill:` |
+| `third_party/gnu-tools`, `third_party/busybox-w32` | What the GNU and busybox builds add: a UTF-8 manifest, the args-file shim, a sed patch |
+| `scripts/` | Building the tools, packaging, installing, and checking the distribution |
+
+## Next
+
+An MCP server mode (`bash.exe mcp`) for harnesses that can't be pointed at a `bash.exe`: Codex with its PowerShell default, Gemini CLI, Copilot CLI, and chat clients. See [CHANGELOG.md](CHANGELOG.md) for what each release changed.
