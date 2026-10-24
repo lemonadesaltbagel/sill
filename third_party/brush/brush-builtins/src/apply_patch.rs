@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use brush_core::{ExecutionExitCode, ExecutionResult, builtins};
 
 /// Apply a patch in Codex's apply_patch format (from the argument, or stdin).
+#[allow(clippy::doc_markdown, reason = "shown as --help text")]
 #[derive(Parser)]
 #[command(disable_help_flag = true)]
 pub(crate) struct ApplyPatchCommand {
@@ -40,9 +41,18 @@ brush_clap_adapter::impl_parse_args!(ApplyPatchCommand);
 
 #[derive(Debug, PartialEq, Eq)]
 enum Op {
-    Add { path: String, lines: Vec<String> },
-    Delete { path: String },
-    Update { path: String, move_to: Option<String>, hunks: Vec<Hunk> },
+    Add {
+        path: String,
+        lines: Vec<String>,
+    },
+    Delete {
+        path: String,
+    },
+    Update {
+        path: String,
+        move_to: Option<String>,
+        hunks: Vec<Hunk>,
+    },
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -53,8 +63,12 @@ struct Hunk {
     at_eof: bool,
 }
 
+#[expect(clippy::too_many_lines)]
 fn parse(text: &str) -> Result<Vec<Op>, String> {
-    let lines: Vec<&str> = text.lines().map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
     let start = lines
         .iter()
         .position(|l| l.trim() == "*** Begin Patch")
@@ -76,12 +90,21 @@ fn parse(text: &str) -> Result<Vec<Op>, String> {
             let mut body = Vec::new();
             while i < end && !lines[i].starts_with("*** ") {
                 let l = lines[i];
-                body.push(l.strip_prefix('+').ok_or_else(|| format!("in Add File {path}: line without '+': {l}"))?.to_owned());
+                body.push(
+                    l.strip_prefix('+')
+                        .ok_or_else(|| format!("in Add File {path}: line without '+': {l}"))?
+                        .to_owned(),
+                );
                 i += 1;
             }
-            ops.push(Op::Add { path: path.trim().to_owned(), lines: body });
+            ops.push(Op::Add {
+                path: path.trim().to_owned(),
+                lines: body,
+            });
         } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
-            ops.push(Op::Delete { path: path.trim().to_owned() });
+            ops.push(Op::Delete {
+                path: path.trim().to_owned(),
+            });
             i += 1;
         } else if let Some(path) = line.strip_prefix("*** Update File: ") {
             i += 1;
@@ -113,19 +136,24 @@ fn parse(text: &str) -> Result<Vec<Op>, String> {
                     });
                 } else {
                     let h = current.get_or_insert_with(Hunk::default);
-                    match l.chars().next() {
-                        Some('+') => h.new.push(l[1..].to_owned()),
-                        Some('-') => h.old.push(l[1..].to_owned()),
+                    let mut chars = l.chars();
+                    let first = chars.next();
+                    let rest = chars.as_str();
+                    match first {
+                        Some('+') => h.new.push(rest.to_owned()),
+                        Some('-') => h.old.push(rest.to_owned()),
                         Some(' ') => {
-                            h.old.push(l[1..].to_owned());
-                            h.new.push(l[1..].to_owned());
+                            h.old.push(rest.to_owned());
+                            h.new.push(rest.to_owned());
                         }
                         // An empty line is an empty context line.
                         None => {
                             h.old.push(String::new());
                             h.new.push(String::new());
                         }
-                        Some(_) => return Err(format!("in Update File {path}: unexpected line: {l}")),
+                        Some(_) => {
+                            return Err(format!("in Update File {path}: unexpected line: {l}"));
+                        }
                     }
                 }
                 i += 1;
@@ -134,7 +162,11 @@ fn parse(text: &str) -> Result<Vec<Op>, String> {
             if hunks.is_empty() && move_to.is_none() {
                 return Err(format!("Update File {path} has no hunks"));
             }
-            ops.push(Op::Update { path: path.trim().to_owned(), move_to, hunks });
+            ops.push(Op::Update {
+                path: path.trim().to_owned(),
+                move_to,
+                hunks,
+            });
         } else if line.trim().is_empty() {
             i += 1;
         } else {
@@ -148,15 +180,29 @@ fn parse(text: &str) -> Result<Vec<Op>, String> {
 }
 
 /// Where `needle` occurs in `hay` at or after `from`, comparing lines with `eq`.
-fn find_with(hay: &[String], needle: &[String], from: usize, eq: impl Fn(&str, &str) -> bool) -> Option<usize> {
+fn find_with(
+    hay: &[String],
+    needle: &[String],
+    from: usize,
+    eq: impl Fn(&str, &str) -> bool,
+) -> Option<usize> {
     if needle.is_empty() {
         return Some(from.min(hay.len()));
     }
-    (from..=hay.len().checked_sub(needle.len())?).find(|&i| hay[i..i + needle.len()].iter().zip(needle).all(|(a, b)| eq(a, b)))
+    (from..=hay.len().checked_sub(needle.len())?).find(|&i| {
+        hay[i..i + needle.len()]
+            .iter()
+            .zip(needle)
+            .all(|(a, b)| eq(a, b))
+    })
 }
 
 fn find(hay: &[String], needle: &[String], from: usize, at_eof: bool) -> Option<usize> {
-    let tests: [fn(&str, &str) -> bool; 3] = [|a, b| a == b, |a, b| a.trim_end() == b.trim_end(), |a, b| a.trim() == b.trim()];
+    let tests: [fn(&str, &str) -> bool; 3] = [
+        |a, b| a == b,
+        |a, b| a.trim_end() == b.trim_end(),
+        |a, b| a.trim() == b.trim(),
+    ];
     if at_eof && hay.len() >= needle.len() {
         let at = hay.len() - needle.len();
         if at >= from {
@@ -167,7 +213,9 @@ fn find(hay: &[String], needle: &[String], from: usize, at_eof: bool) -> Option<
             }
         }
     }
-    tests.into_iter().find_map(|eq| find_with(hay, needle, from, eq))
+    tests
+        .into_iter()
+        .find_map(|eq| find_with(hay, needle, from, eq))
 }
 
 /// A file's text split into lines, with its line ending and whether it ended with one.
@@ -182,13 +230,30 @@ impl Text {
         let crlf = content.contains("\r\n");
         let final_newline = content.ends_with('\n');
         let body = content.strip_suffix('\n').unwrap_or(content);
-        let body = if crlf { body.strip_suffix('\r').unwrap_or(body) } else { body };
+        let body = if crlf {
+            body.strip_suffix('\r').unwrap_or(body)
+        } else {
+            body
+        };
         let lines = if content.is_empty() {
             Vec::new()
         } else {
-            body.split('\n').map(|l| if crlf { l.strip_suffix('\r').unwrap_or(l) } else { l }.to_owned()).collect()
+            body.split('\n')
+                .map(|l| {
+                    if crlf {
+                        l.strip_suffix('\r').unwrap_or(l)
+                    } else {
+                        l
+                    }
+                    .to_owned()
+                })
+                .collect()
         };
-        Self { lines, crlf, final_newline }
+        Self {
+            lines,
+            crlf,
+            final_newline,
+        }
     }
 
     fn render(&self) -> String {
@@ -209,18 +274,31 @@ fn apply_hunks(path: &str, content: &str, hunks: &[Hunk]) -> Result<String, Stri
             let at = text.lines[pos..]
                 .iter()
                 .position(|l| l.trim() == anchor.trim())
-                .or_else(|| text.lines[pos..].iter().position(|l| l.contains(anchor.trim())))
+                .or_else(|| {
+                    text.lines[pos..]
+                        .iter()
+                        .position(|l| l.contains(anchor.trim()))
+                })
                 .ok_or_else(|| format!("{path}: no line '{anchor}' to anchor a hunk"))?;
             pos += at + 1;
         }
         let at = if h.old.is_empty() {
             // Only additions: at the anchor, or at the end of the file.
-            if h.anchor.is_some() && !h.at_eof { pos } else { text.lines.len() }
+            if h.anchor.is_some() && !h.at_eof {
+                pos
+            } else {
+                text.lines.len()
+            }
         } else {
-            find(&text.lines, &h.old, pos, h.at_eof)
-                .ok_or_else(|| format!("{path}: these lines aren't in the file:\n{}", h.old.join("\n")))?
+            find(&text.lines, &h.old, pos, h.at_eof).ok_or_else(|| {
+                format!(
+                    "{path}: these lines aren't in the file:\n{}",
+                    h.old.join("\n")
+                )
+            })?
         };
-        text.lines.splice(at..at + h.old.len(), h.new.iter().cloned());
+        text.lines
+            .splice(at..at + h.old.len(), h.new.iter().cloned());
         pos = at + h.new.len();
     }
     if text.lines.is_empty() {
@@ -250,9 +328,14 @@ fn plan(ops: &[Op], resolve: &dyn Fn(&str) -> PathBuf) -> Result<Plan, String> {
                 }
                 plan.push((p, None, format!("D {path}")));
             }
-            Op::Update { path, move_to, hunks } => {
+            Op::Update {
+                path,
+                move_to,
+                hunks,
+            } => {
                 let p = resolve(path);
-                let content = std::fs::read_to_string(&p).map_err(|e| format!("{path}: {}", sill_message(&e)))?;
+                let content = std::fs::read_to_string(&p)
+                    .map_err(|e| format!("{path}: {}", sill_message(&e)))?;
                 let new = apply_hunks(path, &content, hunks)?;
                 if let Some(to) = move_to {
                     plan.push((resolve(to), Some(new), format!("M {to}")));
@@ -267,7 +350,11 @@ fn plan(ops: &[Op], resolve: &dyn Fn(&str) -> PathBuf) -> Result<Plan, String> {
 }
 
 fn sill_message(e: &std::io::Error) -> String {
-    if e.kind() == std::io::ErrorKind::NotFound { "No such file or directory".into() } else { e.to_string() }
+    if e.kind() == std::io::ErrorKind::NotFound {
+        "No such file or directory".into()
+    } else {
+        e.to_string()
+    }
 }
 
 fn write(plan: &Plan) -> Result<Vec<String>, String> {
@@ -276,11 +363,14 @@ fn write(plan: &Plan) -> Result<Vec<String>, String> {
         match content {
             Some(text) => {
                 if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-                    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {}", dir.display(), sill_message(&e)))?;
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| format!("{}: {}", dir.display(), sill_message(&e)))?;
                 }
-                std::fs::write(path, text).map_err(|e| format!("{}: {}", path.display(), sill_message(&e)))?;
+                std::fs::write(path, text)
+                    .map_err(|e| format!("{}: {}", path.display(), sill_message(&e)))?;
             }
-            None => std::fs::remove_file(path).map_err(|e| format!("{}: {}", path.display(), sill_message(&e)))?,
+            None => std::fs::remove_file(path)
+                .map_err(|e| format!("{}: {}", path.display(), sill_message(&e)))?,
         }
         if !note.is_empty() {
             done.push(note.clone());
@@ -297,19 +387,21 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for ApplyPatchComman
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         let name = context.command_name.clone();
-        let patch = match self.patch {
-            Some(p) => p,
-            None => {
-                let mut buf = Vec::new();
-                context.stdin().read_to_end(&mut buf)?;
-                String::from_utf8_lossy(&buf).into_owned()
-            }
+        let patch = if let Some(p) = self.patch {
+            p
+        } else {
+            let mut buf = Vec::new();
+            context.stdin().read_to_end(&mut buf)?;
+            String::from_utf8_lossy(&buf).into_owned()
         };
         let resolve = |p: &str| -> PathBuf {
-            let path = brush_core::sys::fs::map_shell_path(Path::new(p)).unwrap_or_else(|| p.into());
+            let path =
+                brush_core::sys::fs::map_shell_path(Path::new(p)).unwrap_or_else(|| p.into());
             context.shell.absolute_path(&path)
         };
-        let result = parse(&patch).and_then(|ops| plan(&ops, &resolve)).and_then(|p| write(&p));
+        let result = parse(&patch)
+            .and_then(|ops| plan(&ops, &resolve))
+            .and_then(|p| write(&p));
         match result {
             Ok(done) => {
                 writeln!(context.stdout(), "Success. Updated the following files:")?;
@@ -331,9 +423,11 @@ mod tests {
     use super::*;
 
     fn hunks(patch: &str) -> Vec<Hunk> {
-        match parse(patch).unwrap().into_iter().next().unwrap() {
+        let op = parse(patch).unwrap().into_iter().next().unwrap();
+        assert!(matches!(op, Op::Update { .. }), "{op:?}");
+        match op {
             Op::Update { hunks, .. } => hunks,
-            other => panic!("{other:?}"),
+            _ => Vec::new(),
         }
     }
 
@@ -345,19 +439,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ops.len(), 3);
-        assert_eq!(ops[0], Op::Add { path: "a/new.txt".into(), lines: vec!["one".into(), "two".into()] });
-        assert_eq!(ops[1], Op::Delete { path: "old.txt".into() });
-        let Op::Update { move_to, hunks, .. } = &ops[2] else { panic!() };
-        assert_eq!(move_to.as_deref(), Some("y.py"));
-        assert_eq!(hunks[0].anchor.as_deref(), Some("def f():"));
+        assert_eq!(
+            ops[0],
+            Op::Add {
+                path: "a/new.txt".into(),
+                lines: vec!["one".into(), "two".into()]
+            }
+        );
+        assert_eq!(
+            ops[1],
+            Op::Delete {
+                path: "old.txt".into()
+            }
+        );
+        assert!(
+            matches!(&ops[2], Op::Update { move_to, hunks, .. }
+                if move_to.as_deref() == Some("y.py") && hunks[0].anchor.as_deref() == Some("def f():")),
+            "{:?}",
+            ops[2]
+        );
         assert!(parse("no patch here").is_err());
     }
 
     #[test]
     fn keeps_crlf_and_the_rest_of_the_file() {
-        let h = hunks("*** Begin Patch\r\n*** Update File: app.ini\r\n@@\r\n-port=8080\r\n+port=9090\r\n*** End Patch\r\n");
-        let out = apply_hunks("app.ini", "[server]\r\nhost=0.0.0.0\r\nport=8080\r\n\r\n[log]\r\n", &h).unwrap();
-        assert_eq!(out, "[server]\r\nhost=0.0.0.0\r\nport=9090\r\n\r\n[log]\r\n");
+        let h = hunks(
+            "*** Begin Patch\r\n*** Update File: app.ini\r\n@@\r\n-port=8080\r\n+port=9090\r\n*** End Patch\r\n",
+        );
+        let out = apply_hunks(
+            "app.ini",
+            "[server]\r\nhost=0.0.0.0\r\nport=8080\r\n\r\n[log]\r\n",
+            &h,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "[server]\r\nhost=0.0.0.0\r\nport=9090\r\n\r\n[log]\r\n"
+        );
         // No final newline stays none.
         let h = hunks("*** Begin Patch\n*** Update File: f\n-a\n+b\n*** End Patch");
         assert_eq!(apply_hunks("f", "x\na", &h).unwrap(), "x\nb");
@@ -374,12 +492,17 @@ mod tests {
             "def first():\n    return 1\n\ndef second():\n    return 22\n"
         );
         let h = hunks("*** Begin Patch\n*** Update File: f\n-nothing like this\n+x\n*** End Patch");
-        assert!(apply_hunks("f", "a\nb\n", &h).unwrap_err().contains("aren't in the file"));
+        assert!(
+            apply_hunks("f", "a\nb\n", &h)
+                .unwrap_err()
+                .contains("aren't in the file")
+        );
     }
 
     #[test]
     fn additions_only_go_to_the_end() {
-        let h = hunks("*** Begin Patch\n*** Update File: f\n@@\n+c\n*** End of File\n*** End Patch");
+        let h =
+            hunks("*** Begin Patch\n*** Update File: f\n@@\n+c\n*** End of File\n*** End Patch");
         assert_eq!(apply_hunks("f", "a\nb\n", &h).unwrap(), "a\nb\nc\n");
     }
 
@@ -403,8 +526,14 @@ mod tests {
         .unwrap();
         let done = write(&plan(&ops, &resolve).unwrap()).unwrap();
         assert_eq!(done, ["A sub/new.txt", "M moved.txt"]);
-        assert_eq!(std::fs::read_to_string(dir.join("sub/new.txt")).unwrap(), "hi\n");
-        assert_eq!(std::fs::read_to_string(dir.join("moved.txt")).unwrap(), "b\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sub/new.txt")).unwrap(),
+            "hi\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("moved.txt")).unwrap(),
+            "b\n"
+        );
         assert!(!dir.join("keep.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

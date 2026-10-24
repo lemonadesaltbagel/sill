@@ -86,8 +86,17 @@ impl<SE: ShellExtensions> ExecutionContext<'_, SE> {
     }
 
     /// Returns the standard error file; usable with `write!` et al.
+    ///
+    /// sill: a line the builtin starts with its own name (`printf: abc: invalid number`)
+    /// gets the shell's prefix, as bash prints it: `build.sh: line 3: printf: ...`.
     pub fn stderr(&self) -> impl std::io::Write + 'static {
-        self.params.stderr(self.shell)
+        DiagnosticWriter {
+            inner: self.params.stderr(self.shell),
+            shell_prefix: self.shell.diagnostic_prefix(),
+            own_prefix: format!("{}: ", self.command_name),
+            held: Vec::new(),
+            line_start: true,
+        }
     }
 
     /// Returns the file descriptor with the given number. Returns `None`
@@ -1039,5 +1048,62 @@ mod tests {
         for arg in args {
             assert_eq!(arg.to_string(), String::from(arg));
         }
+    }
+}
+
+/// sill: see [`ExecutionContext::stderr`]. At the start of each line, bytes are held only
+/// while they could still be the builtin's own name followed by `: `; anything else (a
+/// `read -p` prompt) goes out at once.
+struct DiagnosticWriter<W: std::io::Write> {
+    inner: W,
+    shell_prefix: String,
+    own_prefix: String,
+    held: Vec<u8>,
+    line_start: bool,
+}
+
+impl<W: std::io::Write> DiagnosticWriter<W> {
+    fn release(&mut self, with_prefix: bool) -> std::io::Result<()> {
+        if with_prefix {
+            self.inner.write_all(self.shell_prefix.as_bytes())?;
+        }
+        let held = std::mem::take(&mut self.held);
+        self.inner.write_all(&held)
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for DiagnosticWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for &b in buf {
+            if !self.line_start {
+                self.inner.write_all(&[b])?;
+                self.line_start = b == b'\n';
+                continue;
+            }
+            self.held.push(b);
+            let own = self.own_prefix.as_bytes();
+            if self.held.len() == own.len() && self.held == own {
+                self.release(true)?;
+                self.line_start = false;
+            } else if !own.starts_with(&self.held) {
+                self.release(false)?;
+                self.line_start = b == b'\n';
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.held.is_empty() {
+            self.release(false)?;
+            self.line_start = false;
+        }
+        self.inner.flush()
+    }
+}
+
+impl<W: std::io::Write> Drop for DiagnosticWriter<W> {
+    fn drop(&mut self) {
+        let _ = std::io::Write::flush(self);
     }
 }

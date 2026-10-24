@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0 (2026-10-24)
+
+### Installing
+- **Started through a link** (as winget's Links folder does), sill still finds its bundled tools.
+
+### MCP server
+- **`install-windows.ps1 -Mcp claude`** adds the server to Claude Desktop.
+- The conformance suite also runs through the MCP server (56/56).
+
+### Bash behavior
+- **Namerefs** (`declare -n`, `local -n`):
+  - reads, writes, appends, unset and `test -v` go through the reference, including chains (up to 8, as in bash) and references to array elements (`arr[1]`);
+  - attributes (`declare -i/-x/-r`, `export`) apply to the target;
+  - `${!ref}` gives the name it refers to;
+  - `for ref in a b c` retargets the reference;
+  - `unset -n` removes the reference itself;
+  - bash's checks: self-references, invalid target names, circular chains.
+  The typical use, returning an array from a function (`f() { local -n out=$1; out=(...); }`), works.
+- **Integer variables** (`declare -i`) evaluate what's assigned arithmetically: `x=20+5`, `x+=3*2`.
+- **`printf`:**
+  - `%b` takes a width and precision, and keeps `\"` as bash does;
+  - `%(datefmt)T` formats times;
+  - a character argument (`'A`) is its code;
+  - an invalid number (`printf %d abc`) prints `printf: abc: invalid number` on the command's own stderr (redirections apply) and fails with status 1.
+
+### Messages
+- **Diagnostics in bash's shape, with the line:** `build.sh: line 3: cd: /nope: No such file or directory`, `bash: line 1: printf: abc: invalid number`. This covers the shell's own errors and the builtins' messages.
+- **Expansion and arithmetic errors name what failed:** `u: parameter null or not set`, `5 % 0: division by 0`, `2 +* 3: arithmetic syntax error`.
+
 ## 0.3.0 (2026-10-23)
 
 ### MCP server

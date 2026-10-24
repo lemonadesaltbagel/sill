@@ -40,7 +40,7 @@ mod spec;
 
 pub use self::escape::{EscapeSet, EscapedChar, OctalParsing};
 use crate::extendedbigdecimal::ExtendedBigDecimal;
-pub use argument::{FormatArgument, FormatArguments};
+pub use argument::{FormatArgument, FormatArguments, capture_errors, take_captured_errors};
 
 use self::{escape::parse_escape_code, num_format::Formatter};
 use crate::{

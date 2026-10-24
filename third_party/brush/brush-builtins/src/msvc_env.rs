@@ -12,6 +12,7 @@
 
 use clap::Parser;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -22,6 +23,7 @@ use brush_core::{ExecutionExitCode, ExecutionResult, builtins, variables};
 #[derive(Parser)]
 pub(crate) struct MsvcEnvCommand {
     /// Architecture, as vcvarsall.bat takes it: x64, x86, arm64, x64_arm64, ...
+    #[allow(clippy::doc_markdown, reason = "shown as --help text")]
     #[arg(default_value = "x64")]
     arch: String,
 
@@ -48,7 +50,12 @@ struct Delta {
 /// List variables: vcvars prepends to these rather than replacing them.
 fn is_list_var(name: &str) -> bool {
     const LISTS: &[&str] = &[
-        "PATH", "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "WINDOWSLIBPATH",
+        "PATH",
+        "INCLUDE",
+        "LIB",
+        "LIBPATH",
+        "EXTERNAL_INCLUDE",
+        "WINDOWSLIBPATH",
         "__VSCMD_PREINIT_PATH",
     ];
     LISTS.iter().any(|l| name.eq_ignore_ascii_case(l))
@@ -65,11 +72,17 @@ fn is_volatile(name: &str) -> bool {
 
 /// An entry as compared: case, separators and a trailing separator don't matter.
 fn norm(entry: &str) -> String {
-    entry.replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase()
+    entry
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
 }
 
 fn split_list(v: &str) -> Vec<String> {
-    v.split(';').filter(|e| !e.is_empty()).map(str::to_owned).collect()
+    v.split(';')
+        .filter(|e| !e.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn delta(before: &BTreeMap<String, String>, after: &BTreeMap<String, String>) -> Delta {
@@ -109,11 +122,11 @@ fn delta(before: &BTreeMap<String, String>, after: &BTreeMap<String, String>) ->
 fn serialize(d: &Delta) -> String {
     let mut s = String::from("# sill msvc-env cache v1\n");
     for (k, v) in &d.set {
-        s.push_str(&format!("set {k}={v}\n"));
+        let _ = writeln!(s, "set {k}={v}");
     }
     for (k, entries) in &d.prepend {
         for e in entries {
-            s.push_str(&format!("prepend {k}={e}\n"));
+            let _ = writeln!(s, "prepend {k}={e}");
         }
     }
     s
@@ -132,7 +145,11 @@ fn parse(s: &str) -> Option<Delta> {
             "set" => {
                 d.set.insert(k.to_owned(), v.to_owned());
             }
-            "prepend" => d.prepend.entry(k.to_owned()).or_default().push(v.to_owned()),
+            "prepend" => d
+                .prepend
+                .entry(k.to_owned())
+                .or_default()
+                .push(v.to_owned()),
             _ => return None,
         }
     }
@@ -149,12 +166,15 @@ fn parse_set_output(text: &str) -> BTreeMap<String, String> {
 }
 
 fn valid_arch(arch: &str) -> bool {
-    !arch.is_empty() && arch.len() <= 16 && arch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    !arch.is_empty()
+        && arch.len() <= 16
+        && arch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
     type Error = brush_core::Error;
 
+    #[expect(clippy::too_many_lines)]
     async fn execute(
         self,
         context: brush_core::ExecutionContext<'_, SE>,
@@ -162,7 +182,11 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
         let name = context.command_name.clone();
         let arch = self.arch.to_ascii_lowercase();
         if !valid_arch(&arch) {
-            writeln!(context.stderr(), "{name}: {}: not an architecture vcvarsall.bat takes (x64, x86, arm64, x64_arm64, ...)", self.arch)?;
+            writeln!(
+                context.stderr(),
+                "{name}: {}: not an architecture vcvarsall.bat takes (x64, x86, arm64, x64_arm64, ...)",
+                self.arch
+            )?;
             return Ok(ExecutionExitCode::InvalidUsage.into());
         }
 
@@ -174,7 +198,11 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
             .filter(|(_, v)| v.value().is_set())
             .map(|(k, v)| {
                 let value = v.value().to_cow_str(context.shell).into_owned();
-                let value = if k == "PATH" { win::windows_path_list(&value) } else { value };
+                let value = if k == "PATH" {
+                    win::windows_path_list(&value)
+                } else {
+                    value
+                };
                 (k.clone(), value)
             })
             .collect();
@@ -204,16 +232,27 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
                 // PATH is POSIX-style inside the shell.
                 let current_win = win::windows_path_list(&current);
                 let have: Vec<String> = split_list(&current_win).iter().map(|e| norm(e)).collect();
-                let add: Vec<&String> = entries.iter().filter(|e| !have.contains(&norm(e))).collect();
+                let add: Vec<&String> = entries
+                    .iter()
+                    .filter(|e| !have.contains(&norm(e)))
+                    .collect();
                 if add.is_empty() {
                     continue;
                 }
                 let joined = add.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(";");
                 let add_posix = win::posix_path_list(&joined);
-                if current.is_empty() { add_posix } else { format!("{add_posix}:{current}") }
+                if current.is_empty() {
+                    add_posix
+                } else {
+                    format!("{add_posix}:{current}")
+                }
             } else {
                 let have: Vec<String> = split_list(&current).iter().map(|e| norm(e)).collect();
-                let mut list: Vec<String> = entries.iter().filter(|e| !have.contains(&norm(e))).cloned().collect();
+                let mut list: Vec<String> = entries
+                    .iter()
+                    .filter(|e| !have.contains(&norm(e)))
+                    .cloned()
+                    .collect();
                 if list.is_empty() {
                     continue;
                 }
@@ -225,7 +264,11 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
 
         if self.print {
             for (k, v) in &values {
-                writeln!(context.stdout(), "export {k}='{}'", v.replace('\'', "'\\''"))?;
+                writeln!(
+                    context.stdout(),
+                    "export {k}='{}'",
+                    v.replace('\'', "'\\''")
+                )?;
             }
             return Ok(ExecutionResult::success());
         }
@@ -246,7 +289,11 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for MsvcEnvCommand {
             context.stderr(),
             "{name}: {} (MSVC {}), {arch}{}",
             found.install.display(),
-            found.delta.set.get("VCToolsVersion").map_or("?", String::as_str),
+            found
+                .delta
+                .set
+                .get("VCToolsVersion")
+                .map_or("?", String::as_str),
             if found.cached { ", cached" } else { "" }
         )?;
         Ok(ExecutionResult::success())
@@ -290,17 +337,39 @@ mod win {
         if !vswhere.is_file() {
             return Err(none.to_owned());
         }
-        for requires in [&["-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"][..], &[][..]] {
+        for requires in [
+            &[
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            ][..],
+            &[][..],
+        ] {
             let out = Command::new(&vswhere)
-                .args(["-latest", "-products", "*", "-utf8", "-property", "installationPath"])
+                .args([
+                    "-latest",
+                    "-products",
+                    "*",
+                    "-utf8",
+                    "-property",
+                    "installationPath",
+                ])
                 .args(requires)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
                 .map_err(|e| format!("{}: {e}", vswhere.display()))?;
-            let path = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_owned();
-            if !path.is_empty() && Path::new(&path).join(r"VC\Auxiliary\Build\vcvarsall.bat").is_file() {
+            let path = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            if !path.is_empty()
+                && Path::new(&path)
+                    .join(r"VC\Auxiliary\Build\vcvarsall.bat")
+                    .is_file()
+            {
                 return Ok(PathBuf::from(path));
             }
         }
@@ -314,30 +383,52 @@ mod win {
         install.to_string_lossy().to_ascii_lowercase().hash(&mut h);
         arch.hash(&mut h);
         let vcvarsall = install.join(r"VC\Auxiliary\Build\vcvarsall.bat");
-        std::fs::metadata(&vcvarsall).and_then(|m| m.modified()).ok().hash(&mut h);
-        for dir in [install.join(r"VC\Tools\MSVC"), program_files_x86().join(r"Windows Kits\10\Include")] {
+        std::fs::metadata(&vcvarsall)
+            .and_then(|m| m.modified())
+            .ok()
+            .hash(&mut h);
+        for dir in [
+            install.join(r"VC\Tools\MSVC"),
+            program_files_x86().join(r"Windows Kits\10\Include"),
+        ] {
             let mut names: Vec<String> = std::fs::read_dir(dir)
-                .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                .map(|rd| {
+                    rd.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
                 .unwrap_or_default();
             names.sort();
             names.hash(&mut h);
         }
         let base = std::env::var_os("LOCALAPPDATA")?;
-        Some(PathBuf::from(base).join(r"sill\msvc-env").join(format!("{arch}-{:016x}.env", h.finish())))
+        Some(
+            PathBuf::from(base)
+                .join(r"sill\msvc-env")
+                .join(format!("{arch}-{:016x}.env", h.finish())),
+        )
     }
 
     /// Runs `vcvarsall.bat <arch>` in cmd.exe with `before` as its environment and returns
     /// what it changed.
-    fn run_vcvarsall(install: &Path, arch: &str, before: &BTreeMap<String, String>) -> Result<Delta, String> {
+    fn run_vcvarsall(
+        install: &Path,
+        arch: &str,
+        before: &BTreeMap<String, String>,
+    ) -> Result<Delta, String> {
         let vcvarsall = install.join(r"VC\Auxiliary\Build\vcvarsall.bat");
-        let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
+        let comspec =
+            std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
         // `/u`: internal commands (`set`) write UTF-16, whatever the code page.
         // NoDefaultCurrentDirectoryInExePath (Claude Code sets it) makes VsDevCmd fail to
         // run vswhere.exe from its own directory; this child runs only Microsoft's scripts.
         let mut env = before.clone();
         env.retain(|k, _| !k.eq_ignore_ascii_case("NoDefaultCurrentDirectoryInExePath"));
         let out = Command::new(comspec)
-            .raw_arg(format!("/d /u /s /c \"\"{}\" {arch} >nul && set\"", vcvarsall.display()))
+            .raw_arg(format!(
+                "/d /u /s /c \"\"{}\" {arch} >nul && set\"",
+                vcvarsall.display()
+            ))
             .env_clear()
             .envs(&env)
             .current_dir(install)
@@ -347,25 +438,47 @@ mod win {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| format!("cmd.exe: {e}"))?;
-        let units: Vec<u16> = out.stdout.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = out
+            .stdout
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         let after = parse_set_output(&String::from_utf16_lossy(&units));
-        if !out.status.success() || !after.keys().any(|k| k.eq_ignore_ascii_case("VCToolsInstallDir")) {
+        if !out.status.success()
+            || !after
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("VCToolsInstallDir"))
+        {
             let err = String::from_utf8_lossy(&out.stderr);
             return Err(format!(
                 "vcvarsall.bat {arch} failed{}",
-                err.lines().find(|l| !l.trim().is_empty()).map(|l| format!(": {}", l.trim())).unwrap_or_default()
+                err.lines()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| format!(": {}", l.trim()))
+                    .unwrap_or_default()
             ));
         }
         Ok(super::delta(before, &after))
     }
 
-    pub(super) fn load(arch: &str, before: &BTreeMap<String, String>, refresh: bool) -> Result<Found, String> {
+    pub(super) fn load(
+        arch: &str,
+        before: &BTreeMap<String, String>,
+        refresh: bool,
+    ) -> Result<Found, String> {
         let install = find_install()?;
         let cache = cache_file(&install, arch);
         if !refresh
-            && let Some(delta) = cache.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| parse(&s))
+            && let Some(delta) = cache
+                .as_ref()
+                .and_then(|f| std::fs::read_to_string(f).ok())
+                .and_then(|s| parse(&s))
         {
-            return Ok(Found { install, delta, cached: true });
+            return Ok(Found {
+                install,
+                delta,
+                cached: true,
+            });
         }
         let delta = run_vcvarsall(&install, arch, before)?;
         if let Some(file) = cache {
@@ -374,7 +487,11 @@ mod win {
             }
             let _ = std::fs::write(&file, serialize(&delta));
         }
-        Ok(Found { install, delta, cached: false })
+        Ok(Found {
+            install,
+            delta,
+            cached: false,
+        })
     }
 }
 
@@ -389,7 +506,11 @@ mod win {
     pub(super) fn posix_path_list(s: &str) -> String {
         s.to_owned()
     }
-    pub(super) fn load(_arch: &str, _before: &BTreeMap<String, String>, _refresh: bool) -> Result<Found, String> {
+    pub(super) fn load(
+        _arch: &str,
+        _before: &BTreeMap<String, String>,
+        _refresh: bool,
+    ) -> Result<Found, String> {
         let _ = Delta::default();
         Err("Visual Studio's build tools exist only on Windows".to_owned())
     }
@@ -400,12 +521,20 @@ mod tests {
     use super::*;
 
     fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
     }
 
     #[test]
     fn delta_records_sets_and_prepends() {
-        let before = map(&[("Path", r"C:\Windows;C:\Tools"), ("INCLUDE", ""), ("KEEP", "1"), ("PROMPT", "$P$G")]);
+        let before = map(&[
+            ("Path", r"C:\Windows;C:\Tools"),
+            ("INCLUDE", ""),
+            ("KEEP", "1"),
+            ("PROMPT", "$P$G"),
+        ]);
         let after = map(&[
             ("Path", r"C:\VS\bin;C:\SDK\bin;C:\Windows;C:\Tools"),
             ("INCLUDE", r"C:\VS\include;C:\SDK\include"),
@@ -415,11 +544,27 @@ mod tests {
             ("=C:", r"C:\x"),
         ]);
         let d = delta(&before, &after);
-        assert_eq!(d.prepend.get("PATH"), Some(&vec![r"C:\VS\bin".to_owned(), r"C:\SDK\bin".to_owned()]));
-        assert_eq!(d.set.get("VCToolsVersion").map(String::as_str), Some("14.44.35207"));
+        assert_eq!(
+            d.prepend.get("PATH"),
+            Some(&vec![r"C:\VS\bin".to_owned(), r"C:\SDK\bin".to_owned()])
+        );
+        assert_eq!(
+            d.set.get("VCToolsVersion").map(String::as_str),
+            Some("14.44.35207")
+        );
         // An empty list variable before: the whole value is new.
-        assert_eq!(d.prepend.get("INCLUDE"), Some(&vec![r"C:\VS\include".to_owned(), r"C:\SDK\include".to_owned()]));
-        assert!(!d.set.contains_key("KEEP") && !d.set.contains_key("PROMPT") && !d.set.contains_key("=C:"));
+        assert_eq!(
+            d.prepend.get("INCLUDE"),
+            Some(&vec![
+                r"C:\VS\include".to_owned(),
+                r"C:\SDK\include".to_owned()
+            ])
+        );
+        assert!(
+            !d.set.contains_key("KEEP")
+                && !d.set.contains_key("PROMPT")
+                && !d.set.contains_key("=C:")
+        );
     }
 
     #[test]
@@ -427,7 +572,8 @@ mod tests {
         let mut d = Delta::default();
         d.set.insert("VCToolsVersion".into(), "14.44".into());
         d.set.insert("WEIRD".into(), "a=b c".into());
-        d.prepend.insert("PATH".into(), vec![r"C:\a b".into(), r"C:\c".into()]);
+        d.prepend
+            .insert("PATH".into(), vec![r"C:\a b".into(), r"C:\c".into()]);
         assert_eq!(parse(&serialize(&d)), Some(d));
         assert_eq!(parse("not a cache"), None);
     }

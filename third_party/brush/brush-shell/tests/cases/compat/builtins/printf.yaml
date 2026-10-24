@@ -201,20 +201,17 @@ cases:
       printf '%%q\n'
 
   - name: "printf %b (backslash escape expansion)"
-    known_failure: true
     stdin: |
       printf "%b\n" "hello\\nworld"
       printf "%b\n" "tab\\there"
       printf "%b\n" "quote\\\"here"
 
   - name: "printf %b with field width"
-    known_failure: true
     stdin: |
       printf "%10b|\n" "hello\\nworld"
       printf "%-10b|\n" "tab\\there"
 
   - name: "printf %T (date/time formatting)"
-    known_failure: true # Not supported by uucore
     stdin: |
       printf "%(%Y-%m-%d)T\n" 1234567890
 
@@ -229,7 +226,6 @@ cases:
 
   # Test C-style constant interpretation
   - name: "printf with quoted character arguments"
-    known_failure: true
     stdin: |
       printf "%d\n" "'A"
       printf "%d\n" '"'
@@ -388,7 +384,6 @@ cases:
       printf '~%q\n' ''
 
   - name: "printf -v through nameref"
-    known_failure: true
     stdin: |
       declare -n ref=target
       printf -v ref "formatted %d" 42

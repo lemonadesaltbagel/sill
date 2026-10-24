@@ -39,6 +39,10 @@ pub enum Spec {
     },
     EscapedString {
         position: ArgumentLocation,
+        // sill: width and precision, as bash's `%10b` and `%.3b` take them.
+        precision: Option<CanAsterisk<usize>>,
+        width: Option<CanAsterisk<usize>>,
+        align_left: bool,
     },
     QuotedString {
         position: ArgumentLocation,
@@ -219,10 +223,15 @@ impl Spec {
                 }
             }
             b'b' => {
-                if flags.any() || width.is_some() || precision.is_some() {
+                if flags.zero || flags.hash || flags.quote {
                     return Err(&start[..index]);
                 }
-                Self::EscapedString { position }
+                Self::EscapedString {
+                    position,
+                    precision,
+                    width,
+                    align_left: flags.minus,
+                }
             }
             b'q' => {
                 if flags.any() || width.is_some() || precision.is_some() {
@@ -383,7 +392,14 @@ impl Spec {
                 };
                 write_padded(writer, truncated, width, *align_left || neg_width)
             }
-            Self::EscapedString { position } => {
+            Self::EscapedString {
+                position,
+                precision,
+                width,
+                align_left,
+            } => {
+                let (width, neg_width) = resolve_asterisk_width(*width, args).unwrap_or_default();
+                let precision = resolve_asterisk_precision(*precision, args);
                 let os_str = args.next_string(*position);
                 let bytes = os_str_as_bytes(os_str)?;
                 let mut parsed = Vec::<u8>::new();
@@ -391,7 +407,7 @@ impl Spec {
                 for c in parse_escape_only(
                     bytes,
                     OctalParsing::ThreeDigits,
-                    EscapeSet::WithUnicodeAndQuote,
+                    EscapeSet::WithUnicode,
                 ) {
                     match c.write(&mut parsed)? {
                         ControlFlow::Continue(()) => {}
@@ -403,7 +419,11 @@ impl Spec {
                         }
                     }
                 }
-                writer.write_all(&parsed).map_err(FormatError::IoError)
+                let shown = match precision {
+                    Some(p) if p < parsed.len() => &parsed[..p],
+                    _ => &parsed[..],
+                };
+                write_padded(writer, shown, width, *align_left || neg_width)
             }
             Self::QuotedString { position } => {
                 let s = locale_aware_escape_name(

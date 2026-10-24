@@ -52,7 +52,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CdCommand {
                 if let Some(oldpwd) = context.shell.env_str("OLDPWD") {
                     PathBuf::from(oldpwd.to_string())
                 } else {
-                    writeln!(context.stderr(), "OLDPWD not set")?;
+                    writeln!(context.stderr(), "{}: OLDPWD not set", context.command_name)?;
                     return Ok(ExecutionResult::general_error());
                 }
             } else {
@@ -64,7 +64,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CdCommand {
             if let Some(home_var) = context.shell.env_str("HOME") {
                 PathBuf::from(home_var.to_string())
             } else {
-                writeln!(context.stderr(), "HOME not set")?;
+                writeln!(context.stderr(), "{}: HOME not set", context.command_name)?;
                 return Ok(ExecutionResult::general_error());
             }
         };
@@ -80,10 +80,27 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CdCommand {
                 return error::unimp("cd -e");
             }
 
-            target_dir = context.shell.absolute_path(target_dir).canonicalize()?;
+            match context.shell.absolute_path(&target_dir).canonicalize() {
+                Ok(dir) => target_dir = dir,
+                Err(e) => {
+                    let why = error::io_message(&e);
+                    writeln!(context.stderr(), "{}: {}: {why}", context.command_name, target_dir.display())?;
+                    return Ok(ExecutionResult::general_error());
+                }
+            }
         }
 
-        context.shell.set_working_dir(&target_dir)?;
+        // sill: bash's message, with the directory as given: `cd: /nope: No such file or
+        // directory`.
+        if let Err(e) = context.shell.set_working_dir(&target_dir) {
+            let why = match e.kind() {
+                error::ErrorKind::IoError(io) => error::io_message(io),
+                error::ErrorKind::NotADirectory(_) => "Not a directory".to_owned(),
+                _ => e.to_string(),
+            };
+            writeln!(context.stderr(), "{}: {}: {why}", context.command_name, target_dir.display())?;
+            return Ok(ExecutionResult::general_error());
+        }
 
         // Bash compatibility
         // https://www.gnu.org/software/bash/manual/bash.html#index-cd

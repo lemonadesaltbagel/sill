@@ -69,6 +69,27 @@ impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
         }
     }
 
+    /// sill: what bash puts before a diagnostic: the script's name as it was given (or the
+    /// shell's bare name, `bash`, for `-c` and stdin), and the line, unless interactive:
+    /// `build.sh: line 3: ` or `bash: line 1: `.
+    pub fn diagnostic_prefix(&self) -> String {
+        let name = self.current_shell_name();
+        let name = name.as_deref().unwrap_or("bash");
+        let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+        let base = base.strip_suffix(".exe").unwrap_or(base);
+        // The shell itself goes by its bare name; a script, by the path it was run as.
+        let label = if base.is_empty() || matches!(base, "bash" | "sh" | "sill" | "brush") {
+            if base.is_empty() { "bash".to_owned() } else { base.to_owned() }
+        } else {
+            name.replace('\\', "/")
+        };
+        if self.options().interactive {
+            format!("{label}: ")
+        } else {
+            format!("{label}: line {}: ", crate::wellknownvars::get_lineno(self))
+        }
+    }
+
     /// Displays the given error to the user, using the shell's error display mechanisms.
     ///
     /// # Arguments

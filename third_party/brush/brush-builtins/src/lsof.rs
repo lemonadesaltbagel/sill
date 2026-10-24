@@ -14,6 +14,7 @@
 //! nothing matches, as lsof's.
 
 use clap::Parser;
+use std::fmt::Write as _;
 use std::io::Write;
 
 use brush_core::{ExecutionExitCode, ExecutionResult, builtins};
@@ -50,7 +51,8 @@ struct NetFilter {
     ports: Vec<(u16, u16)>,
 }
 
-const SUPPORTED: &str = "sill's lsof supports FILE..., +D DIR, -i [46][TCP|UDP][:PORT[-PORT]], -sTCP:STATE and -t";
+const SUPPORTED: &str =
+    "sill's lsof supports FILE..., +D DIR, -i [46][TCP|UDP][:PORT[-PORT]], -sTCP:STATE and -t";
 
 fn parse_net_spec(spec: &str) -> Result<NetFilter, String> {
     let mut f = NetFilter::default();
@@ -69,7 +71,7 @@ fn parse_net_spec(spec: &str) -> Result<NetFilter, String> {
     let proto = proto.split('@').next().unwrap_or("");
     match proto.to_ascii_uppercase().as_str() {
         "" => {}
-        p @ ("TCP" | "UDP") => f.protocol = p.to_owned(),
+        p @ ("TCP" | "UDP") => p.clone_into(&mut f.protocol),
         _ => return Err(format!("-i {spec}: unknown protocol `{proto}`")),
     }
     if let Some(port) = port {
@@ -80,7 +82,11 @@ fn parse_net_spec(spec: &str) -> Result<NetFilter, String> {
             };
             match range {
                 (Ok(a), Ok(b)) if a <= b => f.ports.push((a, b)),
-                _ => return Err(format!("-i {spec}: ports must be numbers (`:3000`, `:8000-8010`)")),
+                _ => {
+                    return Err(format!(
+                        "-i {spec}: ports must be numbers (`:3000`, `:8000-8010`)"
+                    ));
+                }
             }
         }
     }
@@ -90,8 +96,13 @@ fn parse_net_spec(spec: &str) -> Result<NetFilter, String> {
 /// Whether an argument after `-i` is its spec rather than a file.
 fn looks_like_net_spec(a: &str) -> bool {
     let up = a.to_ascii_uppercase();
-    a.starts_with(':') || a.starts_with('@') || up.starts_with("TCP") || up.starts_with("UDP")
-        || ((a.starts_with('4') || a.starts_with('6')) && a.len() <= 12 && !a.contains(['/', '\\', '.']))
+    a.starts_with(':')
+        || a.starts_with('@')
+        || up.starts_with("TCP")
+        || up.starts_with("UDP")
+        || ((a.starts_with('4') || a.starts_with('6'))
+            && a.len() <= 12
+            && !a.contains(['/', '\\', '.']))
 }
 
 fn parse_args(args: &[String]) -> Result<Query, String> {
@@ -129,18 +140,24 @@ fn parse_args(args: &[String]) -> Result<Query, String> {
                 i += 1;
                 q.tcp_states.extend(parse_state_spec(spec)?);
             }
-            _ if a.starts_with("-i") => q.net = Some(merge(q.net.take(), parse_net_spec(&a[2..])?)),
-            _ if a.starts_with("-s") => q.tcp_states.extend(parse_state_spec(&a[2..])?),
-            _ if a.starts_with('-') && a.len() > 2 && a[1..].chars().all(|c| "tnPawl".contains(c)) => {
+            _ if a.starts_with("-i") => {
+                let spec = a.strip_prefix("-i").unwrap_or_default();
+                q.net = Some(merge(q.net.take(), parse_net_spec(spec)?));
+            }
+            _ if a.starts_with("-s") => {
+                q.tcp_states
+                    .extend(parse_state_spec(a.strip_prefix("-s").unwrap_or_default())?);
+            }
+            _ if a.len() > 2
+                && a.strip_prefix('-')
+                    .is_some_and(|flags| flags.chars().all(|c| "tnPawl".contains(c))) =>
+            {
                 q.terse |= a.contains('t');
             }
             // Clusters ending in -i: `-ti :3000`, `-ti:3000`, `-nPi tcp:80`.
-            _ if a.starts_with('-')
-                && a[1..].find('i').is_some_and(|k| k > 0 && a[1..1 + k].chars().all(|c| "tnPawl".contains(c))) =>
-            {
-                let k = a[1..].find('i').unwrap_or(0) + 1;
-                q.terse |= a[1..k].contains('t');
-                let attached = &a[k + 1..];
+            _ if cluster_ending_in_i(a).is_some() => {
+                let (flags, attached) = cluster_ending_in_i(a).unwrap_or_default();
+                q.terse |= flags.contains('t');
                 let spec = if !attached.is_empty() {
                     attached
                 } else {
@@ -158,7 +175,9 @@ fn parse_args(args: &[String]) -> Result<Query, String> {
         }
     }
     if q.files.is_empty() && q.dirs.is_empty() && q.net.is_none() {
-        return Err(format!("listing every open file isn't supported on Windows ({SUPPORTED})"));
+        return Err(format!(
+            "listing every open file isn't supported on Windows ({SUPPORTED})"
+        ));
     }
     Ok(q)
 }
@@ -180,11 +199,16 @@ fn merge(old: Option<NetFilter>, new: NetFilter) -> NetFilter {
 }
 
 fn parse_state_spec(spec: &str) -> Result<Vec<String>, String> {
-    let (proto, states) = spec.split_once(':').ok_or_else(|| format!("-s {spec}: expected TCP:STATE"))?;
+    let (proto, states) = spec
+        .split_once(':')
+        .ok_or_else(|| format!("-s {spec}: expected TCP:STATE"))?;
     if !proto.eq_ignore_ascii_case("TCP") {
         return Err(format!("-s {spec}: only TCP states are supported"));
     }
-    Ok(states.split(',').map(|s| s.trim_start_matches('^').to_ascii_uppercase()).collect())
+    Ok(states
+        .split(',')
+        .map(|s| s.trim_start_matches('^').to_ascii_uppercase())
+        .collect())
 }
 
 /// One line of output.
@@ -199,17 +223,39 @@ struct Entry {
     name: String,
 }
 
+/// A flag cluster ending in `-i`, as (the flags before the `i`, what follows it):
+/// `-ti:3000` is `("t", ":3000")`. The flags must all be ones that combine with `-i`.
+fn cluster_ending_in_i(a: &str) -> Option<(&str, &str)> {
+    let (flags, attached) = a.strip_prefix('-')?.split_once('i')?;
+    (!flags.is_empty() && flags.chars().all(|c| "tnPawl".contains(c))).then_some((flags, attached))
+}
+
 fn format_entries(entries: &[Entry], terse: bool) -> String {
     if terse {
         let mut pids: Vec<u32> = entries.iter().map(|e| e.pid).collect();
         pids.sort_unstable();
         pids.dedup();
-        return pids.iter().map(|p| format!("{p}\n")).collect();
+        return pids.iter().fold(String::new(), |mut s, p| {
+            let _ = writeln!(s, "{p}");
+            s
+        });
     }
-    let w = entries.iter().map(|e| e.command.len()).max().unwrap_or(7).max(7);
-    let mut s = format!("{:<w$} {:>6} {:<4} {:<4} NAME\n", "COMMAND", "PID", "TYPE", "NODE");
+    let w = entries
+        .iter()
+        .map(|e| e.command.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    let mut s = format!(
+        "{:<w$} {:>6} {:<4} {:<4} NAME\n",
+        "COMMAND", "PID", "TYPE", "NODE"
+    );
     for e in entries {
-        s.push_str(&format!("{:<w$} {:>6} {:<4} {:<4} {}\n", e.command, e.pid, e.kind, e.node, e.name));
+        let _ = writeln!(
+            s,
+            "{:<w$} {:>6} {:<4} {:<4} {}",
+            e.command, e.pid, e.kind, e.node, e.name
+        );
     }
     s
 }
@@ -231,7 +277,8 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for LsofCommand {
         };
         let resolve = |p: &str| {
             let path = std::path::Path::new(p);
-            let path = brush_core::sys::fs::map_shell_path(path).unwrap_or_else(|| path.to_path_buf());
+            let path =
+                brush_core::sys::fs::map_shell_path(path).unwrap_or_else(|| path.to_path_buf());
             context.shell.absolute_path(&path)
         };
         let mut entries = vec![];
@@ -239,7 +286,9 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for LsofCommand {
         for f in &q.files {
             let path = resolve(f);
             if !path.exists() {
-                problems.push(format!("{name}: status error on {f}: No such file or directory"));
+                problems.push(format!(
+                    "{name}: status error on {f}: No such file or directory"
+                ));
                 continue;
             }
             match win::holders(std::slice::from_ref(&path)) {
@@ -262,7 +311,10 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for LsofCommand {
                     pid,
                     kind: "DIR".to_owned(),
                     node: String::new(),
-                    name: format!("{} (a file under it)", brush_core::sys::fs::display_path(&dir)),
+                    name: format!(
+                        "{} (a file under it)",
+                        brush_core::sys::fs::display_path(&dir)
+                    ),
                 })),
                 Err(e) => problems.push(format!("{name}: {d}: {e}")),
             }
@@ -317,8 +369,15 @@ mod win {
         // SAFETY: `snap` is a valid snapshot handle and `entry` is sized.
         let mut more = unsafe { Process32FirstW(snap, &mut entry) } != 0;
         while more {
-            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            map.insert(entry.th32ProcessID, String::from_utf16_lossy(&entry.szExeFile[..len]));
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            map.insert(
+                entry.th32ProcessID,
+                String::from_utf16_lossy(&entry.szExeFile[..len]),
+            );
             // SAFETY: as above.
             more = unsafe { Process32NextW(snap, &mut entry) } != 0;
         }
@@ -339,13 +398,24 @@ mod win {
         if rc != 0 {
             return Err(format!("Restart Manager unavailable (error {rc})"));
         }
-        let wide: Vec<Vec<u16>> = files.iter().map(|f| f.as_os_str().encode_wide().chain(Some(0)).collect()).collect();
+        let wide: Vec<Vec<u16>> = files
+            .iter()
+            .map(|f| f.as_os_str().encode_wide().chain(Some(0)).collect())
+            .collect();
         let ptrs: Vec<*const u16> = wide.iter().map(|w| w.as_ptr()).collect();
         let result = (|| {
             for chunk in ptrs.chunks(1000) {
                 // SAFETY: NUL-terminated wide strings that outlive the call.
                 let rc = unsafe {
-                    RmRegisterResources(session, u32::try_from(chunk.len()).unwrap_or(0), chunk.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null())
+                    RmRegisterResources(
+                        session,
+                        u32::try_from(chunk.len()).unwrap_or(0),
+                        chunk.as_ptr(),
+                        0,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                    )
                 };
                 if rc != 0 {
                     return Err(format!("Restart Manager error {rc}"));
@@ -357,7 +427,15 @@ mod win {
                 let mut count = u32::try_from(infos.len()).unwrap_or(0);
                 let mut reasons = 0u32;
                 // SAFETY: `infos` holds `count` entries.
-                let rc = unsafe { RmGetList(session, &mut needed, &mut count, infos.as_mut_ptr(), &mut reasons) };
+                let rc = unsafe {
+                    RmGetList(
+                        session,
+                        &mut needed,
+                        &mut count,
+                        infos.as_mut_ptr(),
+                        &mut reasons,
+                    )
+                };
                 if rc == ERROR_MORE_DATA {
                     infos.resize(needed as usize + 4, RM_PROCESS_INFO::default());
                     continue;
@@ -394,7 +472,9 @@ mod win {
         let mut out = vec![];
         let mut stack = vec![dir.to_path_buf()];
         while let Some(d) = stack.pop() {
-            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            let Ok(rd) = std::fs::read_dir(&d) else {
+                continue;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 match e.file_type() {
@@ -411,8 +491,19 @@ mod win {
     }
 
     const TCP_STATES: [&str; 13] = [
-        "", "CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "FIN_WAIT1", "FIN_WAIT2",
-        "CLOSE_WAIT", "CLOSING", "LAST_ACK", "TIME_WAIT", "DELETE_TCB",
+        "",
+        "CLOSED",
+        "LISTEN",
+        "SYN_SENT",
+        "SYN_RCVD",
+        "ESTABLISHED",
+        "FIN_WAIT1",
+        "FIN_WAIT2",
+        "CLOSE_WAIT",
+        "CLOSING",
+        "LAST_ACK",
+        "TIME_WAIT",
+        "DELETE_TCB",
     ];
 
     fn table(tcp: bool, family: u16) -> Result<Vec<u8>, String> {
@@ -422,9 +513,23 @@ mod win {
             // SAFETY: `buf` has `size` bytes (or is empty with size 0 for the first call).
             let rc = unsafe {
                 if tcp {
-                    GetExtendedTcpTable(buf.as_mut_ptr().cast(), &mut size, 1, u32::from(family), TCP_TABLE_OWNER_PID_ALL, 0)
+                    GetExtendedTcpTable(
+                        buf.as_mut_ptr().cast(),
+                        &mut size,
+                        1,
+                        u32::from(family),
+                        TCP_TABLE_OWNER_PID_ALL,
+                        0,
+                    )
                 } else {
-                    GetExtendedUdpTable(buf.as_mut_ptr().cast(), &mut size, 1, u32::from(family), UDP_TABLE_OWNER_PID, 0)
+                    GetExtendedUdpTable(
+                        buf.as_mut_ptr().cast(),
+                        &mut size,
+                        1,
+                        u32::from(family),
+                        UDP_TABLE_OWNER_PID,
+                        0,
+                    )
                 }
             };
             if rc == 0 {
@@ -449,18 +554,27 @@ mod win {
 
     fn v4(raw: u32, port_: u16) -> String {
         let ip = std::net::Ipv4Addr::from(u32::from_be(raw));
-        if ip.is_unspecified() { format!("*:{port_}") } else { format!("{ip}:{port_}") }
+        if ip.is_unspecified() {
+            format!("*:{port_}")
+        } else {
+            format!("{ip}:{port_}")
+        }
     }
 
     fn v6(bytes: &[u8], port_: u16) -> String {
         let a: [u8; 16] = bytes.try_into().unwrap_or([0; 16]);
         let ip = std::net::Ipv6Addr::from(a);
-        if ip.is_unspecified() { format!("*:{port_}") } else { format!("[{ip}]:{port_}") }
+        if ip.is_unspecified() {
+            format!("*:{port_}")
+        } else {
+            format!("[{ip}]:{port_}")
+        }
     }
 
     pub(super) fn sockets(f: &NetFilter, states: &[String]) -> Result<Vec<Entry>, String> {
         let names = process_names();
-        let wants_port = |p: u16| f.ports.is_empty() || f.ports.iter().any(|&(a, b)| (a..=b).contains(&p));
+        let wants_port =
+            |p: u16| f.ports.is_empty() || f.ports.iter().any(|&(a, b)| (a..=b).contains(&p));
         let mut out = vec![];
         let mut push = |pid: u32, kind: &str, node: &str, name: String| {
             out.push(Entry {
@@ -484,14 +598,30 @@ mod win {
                     let (state, local, remote, pid) = if family == 4 {
                         let lp = port(u32_at(r, 8));
                         let rp = port(u32_at(r, 16));
-                        (u32_at(r, 0), (v4(u32_at(r, 4), lp), lp), v4(u32_at(r, 12), rp), u32_at(r, 20))
+                        (
+                            u32_at(r, 0),
+                            (v4(u32_at(r, 4), lp), lp),
+                            v4(u32_at(r, 12), rp),
+                            u32_at(r, 20),
+                        )
                     } else {
                         let lp = port(u32_at(r, 20));
                         let rp = port(u32_at(r, 44));
-                        (u32_at(r, 48), (v6(&r[0..16], lp), lp), v6(&r[24..40], rp), u32_at(r, 52))
+                        (
+                            u32_at(r, 48),
+                            (v6(&r[0..16], lp), lp),
+                            v6(&r[24..40], rp),
+                            u32_at(r, 52),
+                        )
                     };
                     let state_name = TCP_STATES.get(state as usize).copied().unwrap_or("UNKNOWN");
-                    if !wants_port(local.1) && !remote.rsplit(':').next().and_then(|p| p.parse().ok()).is_some_and(|p| wants_port(p) && !f.ports.is_empty()) {
+                    if !wants_port(local.1)
+                        && !remote
+                            .rsplit(':')
+                            .next()
+                            .and_then(|p| p.parse().ok())
+                            .is_some_and(|p| wants_port(p) && !f.ports.is_empty())
+                    {
                         continue;
                     }
                     if !states.is_empty() && !states.iter().any(|s| s == state_name) {
@@ -536,8 +666,8 @@ mod win {
     pub(super) fn holders(_files: &[PathBuf]) -> Result<Vec<(u32, String)>, String> {
         Err("only on Windows".to_owned())
     }
-    pub(super) fn files_under(_dir: &Path, _limit: usize) -> Vec<PathBuf> {
-        vec![]
+    pub(super) const fn files_under(_dir: &Path, _limit: usize) -> Vec<PathBuf> {
+        Vec::new()
     }
     pub(super) fn sockets(_f: &NetFilter, _states: &[String]) -> Result<Vec<Entry>, String> {
         Err("only on Windows".to_owned())
@@ -574,7 +704,13 @@ mod tests {
         assert_eq!(q.net, Some(NetFilter::default()));
 
         let q = parse_args(&args("build/out.log +D node_modules")).unwrap();
-        assert_eq!((q.files, q.dirs), (vec!["build/out.log".to_owned()], vec!["node_modules".to_owned()]));
+        assert_eq!(
+            (q.files, q.dirs),
+            (
+                vec!["build/out.log".to_owned()],
+                vec!["node_modules".to_owned()]
+            )
+        );
 
         let q = parse_args(&args("-i 4 -i :80")).unwrap();
         assert_eq!(q.net.unwrap().family, 4);
@@ -584,19 +720,40 @@ mod tests {
     fn unsupported_is_explained() {
         for bad in ["-p 123", "-u me", "", "-c node", "-i :http"] {
             let err = parse_args(&args(bad)).unwrap_err();
-            assert!(err.contains("supports") || err.contains("must be numbers") || err.contains("isn't supported"), "{bad}: {err}");
+            assert!(
+                err.contains("supports")
+                    || err.contains("must be numbers")
+                    || err.contains("isn't supported"),
+                "{bad}: {err}"
+            );
         }
     }
 
     #[test]
     fn output() {
         let e = vec![
-            Entry { command: "python.exe".into(), pid: 4242, kind: "IPv4".into(), node: "TCP".into(), name: "*:8765 (LISTEN)".into() },
-            Entry { command: "python.exe".into(), pid: 4242, kind: "IPv6".into(), node: "TCP".into(), name: "*:8765 (LISTEN)".into() },
+            Entry {
+                command: "python.exe".into(),
+                pid: 4242,
+                kind: "IPv4".into(),
+                node: "TCP".into(),
+                name: "*:8765 (LISTEN)".into(),
+            },
+            Entry {
+                command: "python.exe".into(),
+                pid: 4242,
+                kind: "IPv6".into(),
+                node: "TCP".into(),
+                name: "*:8765 (LISTEN)".into(),
+            },
         ];
         let s = format_entries(&e, false);
         let first = s.lines().nth(1).unwrap();
-        assert_eq!(first.split_whitespace().nth(1), Some("4242"), "PID is the second column");
+        assert_eq!(
+            first.split_whitespace().nth(1),
+            Some("4242"),
+            "PID is the second column"
+        );
         assert_eq!(format_entries(&e, true), "4242\n");
     }
 }

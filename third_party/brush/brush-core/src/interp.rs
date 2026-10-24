@@ -890,14 +890,27 @@ impl Execute for ast::ForClauseCommand {
                 }
             }
 
-            // Update the variable.
-            shell.env_mut().update_or_add(
-                &self.variable_name,
-                ShellValueLiteral::Scalar(value),
-                |_| Ok(()),
-                EnvironmentLookup::Anywhere,
-                EnvironmentScope::Global,
-            )?;
+            // Update the variable. sill: a nameref loop variable takes each word as its
+            // target, as in bash (a readonly one can't; the body runs anyway).
+            let loop_var_is_nameref = shell
+                .env()
+                .get(&self.variable_name)
+                .is_some_and(|(_, var)| var.is_treated_as_nameref());
+            if loop_var_is_nameref {
+                if let Some((_, var)) = shell.env_mut().get_mut(&self.variable_name)
+                    && let Err(e) = var.assign(ShellValueLiteral::Scalar(value), false)
+                {
+                    let _ = shell.display_error(&mut params.stderr(shell), &e);
+                }
+            } else {
+                shell.env_mut().update_or_add(
+                    &self.variable_name,
+                    ShellValueLiteral::Scalar(value),
+                    |_| Ok(()),
+                    EnvironmentLookup::Anywhere,
+                    EnvironmentScope::Global,
+                )?;
+            }
 
             result = self.body.list.execute(shell, params).await?;
             if result.is_return_or_exit() {
@@ -1604,20 +1617,20 @@ async fn apply_assignment(
     // Figure out if we are trying to assign to a variable or assign to an element of an existing
     // array.
     let mut array_index;
-    let variable_name = match &assignment.name {
+    let mut variable_name = match &assignment.name {
         ast::AssignmentName::VariableName(name) => {
             array_index = None;
-            name
+            name.clone()
         }
         ast::AssignmentName::ArrayElementName(name, index) => {
             let expanded = expansion::basic_expand_word(shell, params, index).await?;
             array_index = Some(expanded);
-            name
+            name.clone()
         }
     };
 
     // Expand the values.
-    let new_value = match &assignment.value {
+    let mut new_value = match &assignment.value {
         ast::AssignmentValue::Scalar(unexpanded_value) => {
             let value =
                 expansion::basic_expand_assignment_word(shell, params, unexpanded_value).await?;
@@ -1660,6 +1673,21 @@ async fn apply_assignment(
             .await;
     }
 
+    // sill: a nameref assigns to the variable it names (`declare -n`); one with no target
+    // yet takes the value as its target. A nameref to an array element (`arr[1]`) assigns
+    // to that element, and can't take a subscript or a list.
+    match shell.env().resolve_nameref(&variable_name) {
+        Ok(crate::env::NamerefTarget::Variable(target)) => variable_name = target,
+        Ok(crate::env::NamerefTarget::Element { name, index }) => {
+            if array_index.is_some() || matches!(new_value, ShellValueLiteral::Array(_)) {
+                return Err(error::ErrorKind::NotValidIdentifier(format!("{name}[{index}]")).into());
+            }
+            variable_name = name;
+            array_index = Some(index);
+        }
+        Err(e) => return Err(e),
+    }
+
     // See if we need to eval an array index.
     if let Some(idx) = &array_index {
         // An array subscript is arithmetically evaluated unless the target is an
@@ -1667,7 +1695,7 @@ async fn apply_assignment(
         // A scalar or unset/untyped variable becomes an indexed array, so its
         // subscript still needs to be evaluated.
         let will_be_indexed_array =
-            if let Some((_, existing_value)) = shell.env().get(variable_name) {
+            if let Some((_, existing_value)) = shell.env().get(&variable_name) {
                 !matches!(
                     existing_value.value(),
                     ShellValue::AssociativeArray(_)
@@ -1684,6 +1712,18 @@ async fn apply_assignment(
                     .to_string(),
             );
         }
+    }
+
+    // sill: an integer variable (`declare -i`) evaluates what's assigned to it arithmetically
+    // (`x=20+5`, `x+=3*2`).
+    if let ShellValueLiteral::Scalar(expr) = &new_value
+        && shell
+            .env()
+            .get(&variable_name)
+            .is_some_and(|(_, var)| var.is_treated_as_integer())
+    {
+        let n = arithmetic::expand_and_eval(shell, params, expr.as_str(), false).await?;
+        new_value = ShellValueLiteral::Scalar(n.to_string());
     }
 
     // Read option before taking mutable borrow on env.
@@ -2140,6 +2180,7 @@ const SMALL_PIPE_CONTENTS: usize = 1024;
 
 /// Tries to grow the pipe so `len` bytes fit without a reader, returning whether it
 /// did. Only Linux can (up to `/proc/sys/fs/pipe-max-size`); elsewhere, never.
+#[allow(clippy::missing_const_for_fn, reason = "not const on Linux")]
 fn grew_pipe_to_hold(reader: &sys::pipes::PipeReader, len: usize) -> bool {
     // ast-grep-ignore: platform-cfg-outside-sys
     #[cfg(any(target_os = "linux", target_os = "android"))]

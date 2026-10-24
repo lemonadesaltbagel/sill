@@ -41,7 +41,9 @@ pub(crate) fn add_defaults<S: AsRef<str>>(
     working_dir: &Path,
     env: &mut Vec<(String, String)>,
 ) {
-    if !is_package_manager(program) && !(is_command_shell(program) && names_package_manager(args)) {
+    let starts_package_manager =
+        is_package_manager(program) || (is_command_shell(program) && names_package_manager(args));
+    if !starts_package_manager {
         return;
     }
     if get(env, "SILL_NO_ENV_DEFAULTS").is_some_and(|v| !v.is_empty() && v != "0") {
@@ -120,17 +122,16 @@ impl Sources {
         // is `npm_config_prefix`/`PREFIX`, else what the Node.js installer's builtin
         // npmrc says (`%APPDATA%\npm`), else Node's own directory.
         let program_dir = program.parent();
-        match npm_env(env, "globalconfig") {
-            Some(path) => s.npmrc_files.push(path.into()),
-            None => {
-                let prefixes = npm_env(env, "prefix")
-                    .or_else(|| get(env, "PREFIX"))
-                    .map(PathBuf::from)
-                    .into_iter()
-                    .chain(get(env, "APPDATA").map(|a| Path::new(a).join("npm")))
-                    .chain(program_dir.map(Path::to_path_buf));
-                s.npmrc_files.extend(prefixes.map(|p| p.join("etc").join("npmrc")));
-            }
+        if let Some(path) = npm_env(env, "globalconfig") {
+            s.npmrc_files.push(path.into());
+        } else {
+            let prefixes = npm_env(env, "prefix")
+                .or_else(|| get(env, "PREFIX"))
+                .map(PathBuf::from)
+                .into_iter()
+                .chain(get(env, "APPDATA").map(|a| Path::new(a).join("npm")))
+                .chain(program_dir.map(Path::to_path_buf));
+            s.npmrc_files.extend(prefixes.map(|p| p.join("etc").join("npmrc")));
         }
         // npm's builtin config, beside npm itself.
         if let Some(dir) = program_dir {

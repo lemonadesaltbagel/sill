@@ -58,8 +58,8 @@ pub enum ErrorKind {
     #[error("cannot assign in this way")]
     CannotAssignToSpecialParameter,
 
-    /// Checked expansion error.
-    #[error("expansion error: {0}")]
+    /// Checked expansion error. (sill: bash's wording, without a prefix of its own.)
+    #[error("{0}")]
     CheckedExpansionError(String),
 
     /// A reference was made to an unknown shell function.
@@ -131,8 +131,9 @@ pub enum ErrorKind {
     #[error("failed to redirect to {0}: {1}")]
     RedirectionFailure(String, String),
 
-    /// An error occurred evaluating an arithmetic expression.
-    #[error("arithmetic evaluation error: {0}")]
+    /// An error occurred evaluating an arithmetic expression. (sill: the message alone, as
+    /// bash words it.)
+    #[error("{0}")]
     EvalError(#[from] crate::arithmetic::EvalError),
 
     /// The given string could not be parsed as an integer.
@@ -163,6 +164,14 @@ pub enum ErrorKind {
     /// An attempt was made to modify a readonly variable.
     #[error("cannot mutate readonly variable")]
     ReadonlyVariable,
+
+    /// sill: a name that isn't a valid identifier where one is needed.
+    #[error("`{0}': not a valid identifier")]
+    NotValidIdentifier(String),
+
+    /// sill: a chain of namerefs that loops, or is longer than bash allows (8).
+    #[error("warning: {0}: circular name reference")]
+    CircularNameReference(String),
 
     /// The indicated pattern is invalid.
     #[error("invalid pattern: '{0}'")]
@@ -475,4 +484,14 @@ impl Error {
 /// * `msg` - The message to include in the error
 pub fn unimp<T>(msg: &'static str) -> Result<T, Error> {
     Err(ErrorKind::Unimplemented(msg).into())
+}
+
+/// sill: an I/O error as `strerror` words it, without Rust's ` (os error N)`: "No such file
+/// or directory" (Windows errors in POSIX wording too; see crates/sill-errno).
+pub fn io_message(err: &std::io::Error) -> String {
+    let full = sill_errno::message(err);
+    match full.find(" (os error ") {
+        Some(at) => full[..at].to_owned(),
+        None => full,
+    }
 }

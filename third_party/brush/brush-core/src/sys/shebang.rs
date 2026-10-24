@@ -36,10 +36,9 @@ pub(crate) fn parse(head: &[u8]) -> Option<Shebang> {
     let line = rest.split(|&b| b == b'\n').next().unwrap_or(rest);
     let line = std::str::from_utf8(line).ok()?.trim_end_matches('\r').trim();
     // Linux: the interpreter, then (all of) the rest as a single optional argument.
-    let (interp, arg) = match line.find([' ', '\t']) {
-        Some(i) => (&line[..i], line[i..].trim()),
-        None => (line, ""),
-    };
+    let (interp, arg) = line
+        .split_once([' ', '\t'])
+        .map_or((line, ""), |(interp, arg)| (interp, arg.trim()));
     if interp.is_empty() {
         return None;
     }

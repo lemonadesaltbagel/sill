@@ -758,7 +758,7 @@ fn get_bash_argv_value(shell: &dyn ShellState) -> variables::ShellValue {
     argv.into()
 }
 
-fn get_lineno(shell: &dyn ShellState) -> usize {
+pub(crate) fn get_lineno(shell: &dyn ShellState) -> usize {
     shell
         .call_stack()
         .current_frame()

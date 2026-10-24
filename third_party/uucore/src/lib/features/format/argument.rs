@@ -132,8 +132,9 @@ impl<'a> FormatArguments<'a> {
             return Err(ExtendedParserError::NotNumeric);
         };
 
+        // sill: a quote alone is the value 0, without a diagnostic, as in bash.
         if bytes.is_empty() {
-            return Err(ExtendedParserError::NotNumeric);
+            return Ok(0u8.into());
         }
 
         let (val, len) = if let Some(c) = bytes
@@ -200,11 +201,40 @@ impl<'a> FormatArguments<'a> {
     }
 }
 
+thread_local! {
+    /// sill: the conversion errors collected for a caller that reports them itself (brush's
+    /// `printf` builtin: on the command's own stderr, in bash's wording), instead of
+    /// printing them to the process's stderr.
+    static CAPTURED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// sill: from now on, collect conversion errors on this thread instead of printing them.
+pub fn capture_errors() {
+    CAPTURED.with(|c| *c.borrow_mut() = Some(Vec::new()));
+}
+
+/// sill: stops collecting, and returns the errors collected since `capture_errors`.
+pub fn take_captured_errors() -> Vec<String> {
+    CAPTURED.with(|c| c.borrow_mut().take().unwrap_or_default())
+}
+
+/// sill: records a conversion error, or prints it when nobody collects them. `bash` is
+/// bash's wording, used when collecting; `gnu`, GNU printf's.
+fn conversion_error(bash: String, gnu: impl FnOnce()) {
+    let captured = CAPTURED.with(|c| {
+        c.borrow_mut().as_mut().map(|v| v.push(bash)).is_some()
+    });
+    if !captured {
+        gnu();
+    }
+}
+
 fn extract_value<T: Default>(
     p: Result<T, ExtendedParserError<T>>,
     input: &str,
     quote_start: bool,
 ) -> T {
+    let raw_input = input;
     match p {
         Ok(v) => v,
         Err(e) => {
@@ -212,11 +242,15 @@ fn extract_value<T: Default>(
             let input = locale_aware_escape_name(OsStr::new(input), QuotingStyle::C_NO_QUOTES);
             match e {
                 ExtendedParserError::Overflow(v) | ExtendedParserError::Underflow(v) => {
-                    show_error!("{}: Numerical result out of range", input.quote());
+                    conversion_error(format!("{raw_input}: Numerical result out of range"), || {
+                        show_error!("{}: Numerical result out of range", input.quote());
+                    });
                     v
                 }
                 ExtendedParserError::NotNumeric => {
-                    show_error!("{}: expected a numeric value", input.quote());
+                    conversion_error(format!("{raw_input}: invalid number"), || {
+                        show_error!("{}: expected a numeric value", input.quote());
+                    });
                     Default::default()
                 }
                 ExtendedParserError::PartialMatch(v, rest) => {
@@ -231,7 +265,9 @@ fn extract_value<T: Default>(
                             );
                         }
                     } else {
-                        show_error!("{}: value not completely converted", input.quote());
+                        conversion_error(format!("{raw_input}: invalid number"), || {
+                            show_error!("{}: value not completely converted", input.quote());
+                        });
                     }
 
                     v

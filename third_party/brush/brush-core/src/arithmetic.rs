@@ -12,8 +12,8 @@ const MAX_VARIABLE_DEREF_DEPTH: u32 = 1024;
 /// Represents an error that occurs during evaluation of an arithmetic expression.
 #[derive(Debug, thiserror::Error)]
 pub enum EvalError {
-    /// Division by zero.
-    #[error("division by zero")]
+    /// Division by zero. (sill: bash's wording.)
+    #[error("division by 0")]
     DivideByZero,
 
     /// Negative exponent.
@@ -36,8 +36,8 @@ pub enum EvalError {
     #[error("failed to update environment")]
     FailedToUpdateEnvironment,
 
-    /// Failed to parse an arithmetic expression.
-    #[error("failed to parse expression: {0}")]
+    /// Failed to parse an arithmetic expression. (sill: bash's wording.)
+    #[error("{0}: arithmetic syntax error")]
     ParseError(String),
 
     /// Error expanding an unset variable.
@@ -47,6 +47,10 @@ pub enum EvalError {
     /// Expression recursion level exceeded.
     #[error("expression recursion level exceeded")]
     RecursionLimitExceeded,
+
+    /// sill: an error in the named expression, as bash reports it: `5 % 0: division by 0`.
+    #[error("{0}: {1}")]
+    InExpression(String, Box<EvalError>),
 }
 
 /// Trait implemented by arithmetic expressions that can be evaluated.
@@ -99,6 +103,7 @@ pub(crate) async fn expand_and_eval(
         .map_err(|_e| EvalError::FailedToExpandExpression(expr.to_owned()))?;
 
     // Now parse.
+    let expanded_text = expanded_self.clone();
     let expr = brush_parser::arithmetic::parse(&expanded_self)
         .map_err(|_e| EvalError::ParseError(expanded_self))?;
 
@@ -109,8 +114,13 @@ pub(crate) async fn expand_and_eval(
             .await;
     }
 
-    // Now evaluate.
-    expr.eval(shell)
+    // Now evaluate. (sill: an error names the expression, as in bash.)
+    expr.eval(shell).map_err(|e| match e {
+        EvalError::DivideByZero | EvalError::NegativeExponent => {
+            EvalError::InExpression(expanded_text.trim_start().to_owned(), Box::new(e))
+        }
+        other => other,
+    })
 }
 
 /// Trait implemented by evaluatable arithmetic expressions.

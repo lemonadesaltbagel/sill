@@ -18,6 +18,7 @@
 //! doesn't have (%CPU, TTY, ...) print as `-`.
 
 use clap::Parser;
+use std::fmt::Write as _;
 use std::io::Write;
 
 use brush_core::{ExecutionExitCode, ExecutionResult, builtins};
@@ -36,7 +37,9 @@ pub(crate) struct Proc {
 
 /// The name without `.exe`, as Linux's comm (`node`).
 fn comm(name: &str) -> &str {
-    name.strip_suffix(".exe").or_else(|| name.strip_suffix(".EXE")).unwrap_or(name)
+    name.strip_suffix(".exe")
+        .or_else(|| name.strip_suffix(".EXE"))
+        .unwrap_or(name)
 }
 
 // --- ps --------------------------------------------------------------------------------
@@ -71,68 +74,129 @@ fn parse_ps(args: &[String]) -> Result<PsQuery, String> {
             "-o" | "-O" | "--format" => {
                 let v = args.get(i).ok_or("-o needs fields")?;
                 i += 1;
-                q.fields.extend(v.split([',', ' ']).filter(|f| !f.is_empty()).map(|f| f.split('=').next().unwrap_or(f).to_ascii_lowercase()));
+                q.fields.extend(
+                    v.split([',', ' '])
+                        .filter(|f| !f.is_empty())
+                        .map(|f| f.split('=').next().unwrap_or(f).to_ascii_lowercase()),
+                );
             }
             "-w" | "-ww" | "--no-headers" | "-h" | "--sort" => {}
             _ if !a.starts_with('-') && a.chars().all(|c| "auxwfe".contains(c)) => {
                 q.bsd = true;
                 q.all |= a.contains('a') || a.contains('x');
             }
-            _ if a.starts_with("-p") && a.len() > 2 => q.pids.extend(parse_pids(&a[2..])?),
-            _ if !a.starts_with('-') && a.chars().all(|c| c.is_ascii_digit() || c == ',') => q.pids.extend(parse_pids(a)?),
-            _ => return Err(format!("{a}: not supported on Windows (sill's ps supports -e, -f, aux, -p PID and -o pid,ppid,user,comm,args)")),
+            _ if a.starts_with("-p") && a.len() > 2 => q
+                .pids
+                .extend(parse_pids(a.strip_prefix("-p").unwrap_or_default())?),
+            _ if !a.starts_with('-') && a.chars().all(|c| c.is_ascii_digit() || c == ',') => {
+                q.pids.extend(parse_pids(a)?);
+            }
+            _ => {
+                return Err(format!(
+                    "{a}: not supported on Windows (sill's ps supports -e, -f, aux, -p PID and -o pid,ppid,user,comm,args)"
+                ));
+            }
         }
     }
     for f in &q.fields {
-        if !matches!(f.as_str(), "pid" | "ppid" | "user" | "uid" | "comm" | "args" | "cmd" | "command" | "ucomm" | "fname") {
-            return Err(format!("-o {f}: not supported on Windows (fields: pid, ppid, user, comm, args)"));
+        if !matches!(
+            f.as_str(),
+            "pid"
+                | "ppid"
+                | "user"
+                | "uid"
+                | "comm"
+                | "args"
+                | "cmd"
+                | "command"
+                | "ucomm"
+                | "fname"
+        ) {
+            return Err(format!(
+                "-o {f}: not supported on Windows (fields: pid, ppid, user, comm, args)"
+            ));
         }
     }
     Ok(q)
 }
 
 fn parse_pids(v: &str) -> Result<Vec<u32>, String> {
-    v.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse::<u32>().map_err(|_| format!("{s}: not a PID"))).collect()
+    v.split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.trim()
+                .parse::<u32>()
+                .map_err(|_| format!("{s}: not a PID"))
+        })
+        .collect()
 }
 
 fn format_ps(q: &PsQuery, procs: &[Proc], own_pid: u32) -> String {
     let selected: Vec<&Proc> = procs
         .iter()
-        .filter(|p| if q.pids.is_empty() { q.all || q.bsd || p.pid == own_pid || p.ppid == own_pid } else { q.pids.contains(&p.pid) })
+        .filter(|p| {
+            if q.pids.is_empty() {
+                q.all || q.bsd || p.pid == own_pid || p.ppid == own_pid
+            } else {
+                q.pids.contains(&p.pid)
+            }
+        })
         .collect();
     let mut s = String::new();
     if !q.fields.is_empty() {
-        let head: Vec<String> = q.fields.iter().map(|f| match f.as_str() {
-            "pid" => "PID", "ppid" => "PPID", "user" | "uid" => "USER", "comm" | "ucomm" | "fname" => "COMMAND",
-            _ => "COMMAND",
-        }.to_owned()).collect();
+        let head: Vec<String> = q
+            .fields
+            .iter()
+            .map(|f| {
+                match f.as_str() {
+                    "pid" => "PID",
+                    "ppid" => "PPID",
+                    "user" | "uid" => "USER",
+                    "comm" | "ucomm" | "fname" => "COMMAND",
+                    _ => "COMMAND",
+                }
+                .to_owned()
+            })
+            .collect();
         s.push_str(&head.join(" "));
         s.push('\n');
         for p in selected {
-            let cols: Vec<String> = q.fields.iter().map(|f| match f.as_str() {
-                "pid" => format!("{:>6}", p.pid),
-                "ppid" => format!("{:>6}", p.ppid),
-                "user" | "uid" => p.user.clone(),
-                "comm" | "ucomm" | "fname" => comm(&p.name).to_owned(),
-                _ => p.cmdline.clone(),
-            }).collect();
+            let cols: Vec<String> = q
+                .fields
+                .iter()
+                .map(|f| match f.as_str() {
+                    "pid" => format!("{:>6}", p.pid),
+                    "ppid" => format!("{:>6}", p.ppid),
+                    "user" | "uid" => p.user.clone(),
+                    "comm" | "ucomm" | "fname" => comm(&p.name).to_owned(),
+                    _ => p.cmdline.clone(),
+                })
+                .collect();
             s.push_str(&cols.join(" "));
             s.push('\n');
         }
     } else if q.bsd {
         s.push_str("USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n");
         for p in selected {
-            s.push_str(&format!("{:<10} {:>6}    -    -      -     - ?        -    -         - {}\n", p.user, p.pid, p.cmdline));
+            let _ = writeln!(
+                s,
+                "{:<10} {:>6}    -    -      -     - ?        -    -         - {}",
+                p.user, p.pid, p.cmdline
+            );
         }
     } else if q.full {
         s.push_str("UID          PID    PPID  C STIME TTY          TIME CMD\n");
         for p in selected {
-            s.push_str(&format!("{:<10} {:>6} {:>7}  - -     ?               - {}\n", p.user, p.pid, p.ppid, p.cmdline));
+            let _ = writeln!(
+                s,
+                "{:<10} {:>6} {:>7}  - -     ?               - {}",
+                p.user, p.pid, p.ppid, p.cmdline
+            );
         }
     } else {
         s.push_str("    PID TTY          TIME CMD\n");
         for p in selected {
-            s.push_str(&format!("{:>7} ?               - {}\n", p.pid, comm(&p.name)));
+            let _ = writeln!(s, "{:>7} ?               - {}", p.pid, comm(&p.name));
         }
     }
     s
@@ -154,7 +218,13 @@ struct MatchQuery {
     patterns: Vec<String>,
 }
 
-const SIGNALS: &[(&str, i32)] = &[("HUP", 1), ("INT", 2), ("QUIT", 3), ("KILL", 9), ("TERM", 15)];
+const SIGNALS: &[(&str, i32)] = &[
+    ("HUP", 1),
+    ("INT", 2),
+    ("QUIT", 3),
+    ("KILL", 9),
+    ("TERM", 15),
+];
 
 fn signal_number(spec: &str) -> Option<i32> {
     if let Ok(n) = spec.parse::<i32>() {
@@ -194,10 +264,15 @@ fn parse_match(cmd: &str, args: &[String]) -> Result<MatchQuery, String> {
                 i += 1;
                 q.signal = Some(signal_number(v).ok_or_else(|| format!("{v}: unknown signal"))?);
             }
-            _ if cmd != "pgrep" && a.len() > 1 && signal_number(&a[1..]).is_some() => q.signal = signal_number(&a[1..]),
-            _ if a.starts_with("--signal=") => q.signal = Some(signal_number(&a[9..]).ok_or_else(|| format!("{a}: unknown signal"))?),
-            _ if a.len() > 2 && a[1..].chars().all(|c| "fxilac".contains(c)) => {
-                for c in a[1..].chars() {
+            _ if cmd != "pgrep" && a.len() > 1 && signal_number(after_first(a)).is_some() => {
+                q.signal = signal_number(after_first(a));
+            }
+            _ if a.starts_with("--signal=") => {
+                let v = a.strip_prefix("--signal=").unwrap_or_default();
+                q.signal = Some(signal_number(v).ok_or_else(|| format!("{a}: unknown signal"))?);
+            }
+            _ if a.len() > 2 && after_first(a).chars().all(|c| "fxilac".contains(c)) => {
+                for c in after_first(a).chars() {
                     match c {
                         'f' => q.full = true,
                         'x' => q.exact = true,
@@ -208,7 +283,11 @@ fn parse_match(cmd: &str, args: &[String]) -> Result<MatchQuery, String> {
                     }
                 }
             }
-            _ => return Err(format!("{a}: not supported on Windows (sill's {cmd} supports -f, -x, -i, -l, -a, -c, -n, -o and -SIGNAL)")),
+            _ => {
+                return Err(format!(
+                    "{a}: not supported on Windows (sill's {cmd} supports -f, -x, -i, -l, -a, -c, -n, -o and -SIGNAL)"
+                ));
+            }
         }
     }
     if q.patterns.is_empty() {
@@ -220,20 +299,22 @@ fn parse_match(cmd: &str, args: &[String]) -> Result<MatchQuery, String> {
     Ok(q)
 }
 
+/// `a` without its first character (the `-` of an option).
+fn after_first(a: &str) -> &str {
+    let mut chars = a.chars();
+    chars.next();
+    chars.as_str()
+}
+
 /// The command line with its program path reduced to the bare name, as a Linux command
 /// line starts: `"C:\Windows\system32\PING.EXE" -n 3 x` → `PING -n 3 x`.
 fn short_cmdline(cmdline: &str) -> String {
     let t = cmdline.trim_start();
     let (prog, rest) = if let Some(r) = t.strip_prefix('"') {
-        match r.find('"') {
-            Some(i) => (&r[..i], &r[i + 1..]),
-            None => (r, ""),
-        }
+        r.split_once('"').unwrap_or((r, ""))
     } else {
-        match t.find([' ', '\t']) {
-            Some(i) => (&t[..i], &t[i..]),
-            None => (t, ""),
-        }
+        // The rest keeps its leading whitespace.
+        t.find([' ', '\t']).map_or((t, ""), |i| t.split_at(i))
     };
     let base = prog.rsplit(['\\', '/']).next().unwrap_or(prog);
     format!("{}{rest}", comm(base))
@@ -245,7 +326,8 @@ fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
     for pat in &q.patterns {
         let hit = if q.exact {
             if q.full {
-                p.cmdline.eq_ignore_ascii_case(pat) || short_cmdline(&p.cmdline).eq_ignore_ascii_case(pat)
+                p.cmdline.eq_ignore_ascii_case(pat)
+                    || short_cmdline(&p.cmdline).eq_ignore_ascii_case(pat)
             } else {
                 comm(&p.name).eq_ignore_ascii_case(comm(pat))
             }
@@ -255,7 +337,8 @@ fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
                 .build()
                 .map_err(|e| format!("{pat}: {e}"))?;
             if q.full {
-                re.is_match(&p.cmdline).unwrap_or(false) || re.is_match(&short_cmdline(&p.cmdline)).unwrap_or(false)
+                re.is_match(&p.cmdline).unwrap_or(false)
+                    || re.is_match(&short_cmdline(&p.cmdline)).unwrap_or(false)
             } else {
                 re.is_match(comm(&p.name)).unwrap_or(false)
             }
@@ -270,12 +353,27 @@ fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
 /// Processes pkill and killall never end: Windows' own session processes (on Linux,
 /// their counterparts need root; agents here often hold an admin token).
 const PROTECTED: &[&str] = &[
-    "explorer", "dwm", "csrss", "winlogon", "wininit", "lsass", "services", "smss",
-    "svchost", "fontdrvhost", "sihost", "ctfmon", "System", "Registry", "conhost",
+    "explorer",
+    "dwm",
+    "csrss",
+    "winlogon",
+    "wininit",
+    "lsass",
+    "services",
+    "smss",
+    "svchost",
+    "fontdrvhost",
+    "sihost",
+    "ctfmon",
+    "System",
+    "Registry",
+    "conhost",
 ];
 
 fn protected(p: &Proc) -> bool {
-    PROTECTED.iter().any(|n| comm(&p.name).eq_ignore_ascii_case(n))
+    PROTECTED
+        .iter()
+        .any(|n| comm(&p.name).eq_ignore_ascii_case(n))
 }
 
 /// The shell and the processes that started it (the agent harness among them).
@@ -283,7 +381,9 @@ fn ancestors(procs: &[Proc], own_pid: u32) -> Vec<u32> {
     let mut out = vec![own_pid];
     let mut cur = own_pid;
     for _ in 0..64 {
-        let Some(p) = procs.iter().find(|p| p.pid == cur) else { break };
+        let Some(p) = procs.iter().find(|p| p.pid == cur) else {
+            break;
+        };
         if p.ppid == 0 || out.contains(&p.ppid) {
             break;
         }
@@ -350,13 +450,19 @@ macro_rules! raw_args_builtin {
 
 raw_args_builtin!(PsCommand, "Report processes (Windows subset of ps).");
 raw_args_builtin!(PgrepCommand, "Find processes by name or command line.");
-raw_args_builtin!(PkillCommand, "Signal (end) processes by name or command line.");
+raw_args_builtin!(
+    PkillCommand,
+    "Signal (end) processes by name or command line."
+);
 raw_args_builtin!(KillallCommand, "End processes by name.");
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PsCommand {
     type Error = brush_core::Error;
 
-    async fn execute(self, context: brush_core::ExecutionContext<'_, SE>) -> Result<ExecutionResult, Self::Error> {
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<ExecutionResult, Self::Error> {
         let q = match parse_ps(&self.args) {
             Ok(q) => q,
             Err(m) => {
@@ -367,12 +473,16 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PsCommand {
         let procs = win::snapshot();
         let out = format_ps(&q, &procs, std::process::id());
         write!(context.stdout(), "{out}")?;
-        Ok(if !q.pids.is_empty() && out.lines().count() <= 1 { ExecutionResult::general_error() } else { ExecutionResult::success() })
+        Ok(if !q.pids.is_empty() && out.lines().count() <= 1 {
+            ExecutionResult::general_error()
+        } else {
+            ExecutionResult::success()
+        })
     }
 }
 
-async fn run_match<SE: brush_core::ShellExtensions>(
-    context: brush_core::ExecutionContext<'_, SE>,
+fn run_match<SE: brush_core::ShellExtensions>(
+    context: &brush_core::ExecutionContext<'_, SE>,
     args: &[String],
     kill: bool,
 ) -> Result<ExecutionResult, brush_core::Error> {
@@ -399,11 +509,20 @@ async fn run_match<SE: brush_core::ShellExtensions>(
         let code = u32::try_from(128 + q.signal.unwrap_or(15)).unwrap_or(143);
         let (spared, sel): (Vec<&Proc>, Vec<&Proc>) = sel.into_iter().partition(|p| protected(p));
         for p in &spared {
-            writeln!(context.stderr(), "{name}: not ending {} ({}): a Windows session process", p.pid, p.name)?;
+            writeln!(
+                context.stderr(),
+                "{name}: not ending {} ({}): a Windows session process",
+                p.pid,
+                p.name
+            )?;
         }
         for p in &sel {
             if let Err(e) = win::end_tree(p.pid, code) {
-                writeln!(context.stderr(), "{name}: killing pid {} failed: {e}", p.pid)?;
+                writeln!(
+                    context.stderr(),
+                    "{name}: killing pid {} failed: {e}",
+                    p.pid
+                )?;
             }
         }
         if q.count {
@@ -416,27 +535,40 @@ async fn run_match<SE: brush_core::ShellExtensions>(
         }
         !sel.is_empty()
     };
-    Ok(if found { ExecutionResult::success() } else { ExecutionResult::general_error() })
+    Ok(if found {
+        ExecutionResult::success()
+    } else {
+        ExecutionResult::general_error()
+    })
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PgrepCommand {
     type Error = brush_core::Error;
-    async fn execute(self, context: brush_core::ExecutionContext<'_, SE>) -> Result<ExecutionResult, Self::Error> {
-        run_match(context, &self.args, false).await
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<ExecutionResult, Self::Error> {
+        run_match(&context, &self.args, false)
     }
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PkillCommand {
     type Error = brush_core::Error;
-    async fn execute(self, context: brush_core::ExecutionContext<'_, SE>) -> Result<ExecutionResult, Self::Error> {
-        run_match(context, &self.args, true).await
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<ExecutionResult, Self::Error> {
+        run_match(&context, &self.args, true)
     }
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for KillallCommand {
     type Error = brush_core::Error;
-    async fn execute(self, context: brush_core::ExecutionContext<'_, SE>) -> Result<ExecutionResult, Self::Error> {
-        run_match(context, &self.args, true).await
+    async fn execute(
+        self,
+        context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<ExecutionResult, Self::Error> {
+        run_match(&context, &self.args, true)
     }
 }
 
@@ -446,15 +578,26 @@ mod win {
     use std::collections::HashMap;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Security::{GetTokenInformation, LookupAccountSidW, SID_NAME_USE, TOKEN_QUERY, TOKEN_USER, TokenUser};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, LookupAccountSidW, SID_NAME_USE, TOKEN_QUERY, TOKEN_USER, TokenUser,
     };
-    use windows_sys::Win32::System::Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     #[link(name = "ntdll")]
     unsafe extern "system" {
-        fn NtQueryInformationProcess(h: HANDLE, class: u32, info: *mut core::ffi::c_void, len: u32, ret: *mut u32) -> i32;
+        fn NtQueryInformationProcess(
+            h: HANDLE,
+            class: u32,
+            info: *mut core::ffi::c_void,
+            len: u32,
+            ret: *mut u32,
+        ) -> i32;
     }
     const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
 
@@ -464,7 +607,15 @@ mod win {
         for _ in 0..2 {
             // SAFETY: `buf` is writable for its length; the result is a UNICODE_STRING
             // followed by its buffer.
-            let st = unsafe { NtQueryInformationProcess(h, PROCESS_COMMAND_LINE_INFORMATION, buf.as_mut_ptr().cast(), u32::try_from(buf.len()).ok()?, &mut ret) };
+            let st = unsafe {
+                NtQueryInformationProcess(
+                    h,
+                    PROCESS_COMMAND_LINE_INFORMATION,
+                    buf.as_mut_ptr().cast(),
+                    u32::try_from(buf.len()).ok()?,
+                    &mut ret,
+                )
+            };
             if st == 0 {
                 let len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
                 let ptr = usize::from_le_bytes(buf[8..16].try_into().ok()?) as *const u16;
@@ -493,7 +644,13 @@ mod win {
             }
             let mut buf = vec![0u8; 256];
             let mut len = 0u32;
-            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), u32::try_from(buf.len()).ok()?, &mut len) != 0;
+            let ok = GetTokenInformation(
+                token,
+                TokenUser,
+                buf.as_mut_ptr().cast(),
+                u32::try_from(buf.len()).ok()?,
+                &mut len,
+            ) != 0;
             CloseHandle(token);
             if !ok {
                 return None;
@@ -508,7 +665,16 @@ mod win {
             let (mut name, mut domain) = (vec![0u16; 256], vec![0u16; 256]);
             let (mut nl, mut dl) = (256u32, 256u32);
             let mut use_: SID_NAME_USE = 0;
-            if LookupAccountSidW(std::ptr::null(), sid, name.as_mut_ptr(), &mut nl, domain.as_mut_ptr(), &mut dl, &mut use_) == 0 {
+            if LookupAccountSidW(
+                std::ptr::null(),
+                sid,
+                name.as_mut_ptr(),
+                &mut nl,
+                domain.as_mut_ptr(),
+                &mut dl,
+                &mut use_,
+            ) == 0
+            {
                 return None;
             }
             let u = String::from_utf16_lossy(&name[..nl as usize]).to_lowercase();
@@ -531,7 +697,11 @@ mod win {
         // SAFETY: valid snapshot handle and sized entry.
         let mut more = unsafe { Process32FirstW(snap, &mut e) } != 0;
         while more {
-            let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+            let len = e
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(e.szExeFile.len());
             let name = String::from_utf16_lossy(&e.szExeFile[..len]);
             // SAFETY: plain Win32 call; a null handle means no access.
             let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, e.th32ProcessID) };
@@ -547,7 +717,9 @@ mod win {
             out.push(Proc {
                 pid: e.th32ProcessID,
                 ppid: e.th32ParentProcessID,
-                cmdline: cmdline.filter(|c| !c.trim().is_empty()).unwrap_or_else(|| format!("[{name}]")),
+                cmdline: cmdline
+                    .filter(|c| !c.trim().is_empty())
+                    .unwrap_or_else(|| format!("[{name}]")),
                 user: user.unwrap_or_else(|| "-".to_owned()),
                 name,
             });
@@ -567,10 +739,10 @@ mod win {
 #[cfg(not(windows))]
 mod win {
     use super::Proc;
-    pub(super) fn snapshot() -> Vec<Proc> {
-        vec![]
+    pub(super) const fn snapshot() -> Vec<Proc> {
+        Vec::new()
     }
-    pub(super) fn end_tree(_pid: u32, _code: u32) -> Result<(), &'static str> {
+    pub(super) const fn end_tree(_pid: u32, _code: u32) -> Result<(), &'static str> {
         Err("only on Windows")
     }
 }
@@ -580,9 +752,20 @@ mod tests {
     use super::*;
 
     fn procs() -> Vec<Proc> {
-        let p = |pid, ppid, name: &str, cmd: &str| Proc { pid, ppid, name: name.into(), cmdline: cmd.into(), user: "user".into() };
+        let p = |pid, ppid, name: &str, cmd: &str| Proc {
+            pid,
+            ppid,
+            name: name.into(),
+            cmdline: cmd.into(),
+            user: "user".into(),
+        };
         vec![
-            p(100, 4, "node.exe", r#""C:\Program Files\nodejs\node.exe" server.js --port 3000"#),
+            p(
+                100,
+                4,
+                "node.exe",
+                r#""C:\Program Files\nodejs\node.exe" server.js --port 3000"#,
+            ),
             p(200, 4, "python.exe", "python -m http.server 8765"),
             p(300, 1, "bash.exe", "bash -c ps"),
             p(400, 300, "Code.exe", "Code.exe --type=renderer"),
@@ -597,29 +780,68 @@ mod tests {
         let ps = procs();
         let sel = |cmd, args| {
             let q = parse_match(cmd, &a(args)).unwrap();
-            select(&q, &ps, 300).unwrap().iter().map(|p| p.pid).collect::<Vec<_>>()
+            select(&q, &ps, 300)
+                .unwrap()
+                .iter()
+                .map(|p| p.pid)
+                .collect::<Vec<_>>()
         };
         assert_eq!(sel("pgrep", "node"), vec![100]);
         assert_eq!(sel("pgrep", "-f http.server"), vec![200]);
         assert_eq!(sel("pgrep", "-f server"), vec![100, 200]);
         assert_eq!(sel("pgrep", "-x node.exe"), vec![100]);
         assert_eq!(sel("pgrep", "-i code"), vec![400]);
-        assert_eq!(sel("pgrep", "bash"), Vec::<u32>::new(), "the shell itself is excluded");
+        assert_eq!(
+            sel("pgrep", "bash"),
+            Vec::<u32>::new(),
+            "the shell itself is excluded"
+        );
         assert_eq!(sel("pgrep", "NODE"), vec![100], "case-insensitive");
-        assert_eq!(sel("pgrep", "-f ^node server.js"), vec![100], "program path reduced to its name");
+        assert_eq!(
+            sel("pgrep", "-f ^node server.js"),
+            vec![100],
+            "program path reduced to its name"
+        );
         assert_eq!(sel("killall", "node"), vec![100]);
-        assert_eq!(sel("killall", "nod"), Vec::<u32>::new(), "killall matches whole names");
+        assert_eq!(
+            sel("killall", "nod"),
+            Vec::<u32>::new(),
+            "killall matches whole names"
+        );
         assert_eq!(parse_match("pkill", &a("-9 -f x")).unwrap().signal, Some(9));
         let q = parse_match("pgrep", &a("-af server")).unwrap();
         let out = format_pgrep(&q, &select(&q, &ps, 0).unwrap());
-        assert!(out.starts_with("100 \"C:\\Program Files\\nodejs\\node.exe\" server.js"), "{out}");
-        assert!(parse_match("pgrep", &a("-P 1 x")).unwrap_err().contains("not supported"));
+        assert!(
+            out.starts_with("100 \"C:\\Program Files\\nodejs\\node.exe\" server.js"),
+            "{out}"
+        );
+        assert!(
+            parse_match("pgrep", &a("-P 1 x"))
+                .unwrap_err()
+                .contains("not supported")
+        );
         // The harness that started the shell is never selected.
         let mut ps2 = ps.clone();
-        ps2.push(Proc { pid: 1, ppid: 0, name: "node.exe".into(), cmdline: "node harness.js".into(), user: "u".into() });
+        ps2.push(Proc {
+            pid: 1,
+            ppid: 0,
+            name: "node.exe".into(),
+            cmdline: "node harness.js".into(),
+            user: "u".into(),
+        });
         let q = parse_match("pkill", &a("node")).unwrap();
-        assert_eq!(select(&q, &ps2, 300).unwrap().iter().map(|p| p.pid).collect::<Vec<_>>(), vec![100]);
-        assert_eq!(short_cmdline(r#""C:\Windows\system32\PING.EXE" -n 3 x"#), "PING -n 3 x");
+        assert_eq!(
+            select(&q, &ps2, 300)
+                .unwrap()
+                .iter()
+                .map(|p| p.pid)
+                .collect::<Vec<_>>(),
+            vec![100]
+        );
+        assert_eq!(
+            short_cmdline(r#""C:\Windows\system32\PING.EXE" -n 3 x"#),
+            "PING -n 3 x"
+        );
         assert_eq!(short_cmdline("node.exe server.js"), "node server.js");
     }
 
@@ -628,14 +850,25 @@ mod tests {
         let ps = procs();
         let out = format_ps(&parse_ps(&a("aux")).unwrap(), &ps, 300);
         let line = out.lines().find(|l| l.contains("http.server")).unwrap();
-        assert_eq!(line.split_whitespace().nth(1), Some("200"), "PID is $2 in `ps aux`");
+        assert_eq!(
+            line.split_whitespace().nth(1),
+            Some("200"),
+            "PID is $2 in `ps aux`"
+        );
         let out = format_ps(&parse_ps(&a("-ef")).unwrap(), &ps, 300);
         let line = out.lines().find(|l| l.contains("server.js")).unwrap();
-        assert_eq!(line.split_whitespace().nth(2), Some("4"), "PPID is $3 in `ps -ef`");
+        assert_eq!(
+            line.split_whitespace().nth(2),
+            Some("4"),
+            "PPID is $3 in `ps -ef`"
+        );
         let out = format_ps(&parse_ps(&a("-o pid,comm -p 100")).unwrap(), &ps, 300);
         assert_eq!(out, "PID COMMAND\n   100 node\n");
         let out = format_ps(&parse_ps(&[]).unwrap(), &ps, 300);
-        assert!(out.contains("bash") && out.contains("Code") && !out.contains("node"), "{out}");
+        assert!(
+            out.contains("bash") && out.contains("Code") && !out.contains("node"),
+            "{out}"
+        );
         assert!(parse_ps(&a("-o rss")).unwrap_err().contains("fields"));
     }
 }

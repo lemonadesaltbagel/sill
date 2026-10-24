@@ -9,6 +9,30 @@ use crate::error;
 use crate::extensions;
 use crate::variables::{self, ShellValue, ShellValueUnsetType, ShellVariable};
 
+/// sill: the most namerefs a lookup follows, as in bash; one more is a circular reference.
+pub const MAX_NAMEREF_DEPTH: usize = 8;
+
+/// sill: where a variable name leads once namerefs (`declare -n`) are followed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NamerefTarget {
+    /// A whole variable (possibly the name itself, when it isn't a nameref, or is one with
+    /// no target yet).
+    Variable(String),
+    /// One element of an array: a nameref whose target is `name[index]`.
+    Element {
+        /// The array's name.
+        name: String,
+        /// The subscript, as written in the target.
+        index: String,
+    },
+}
+
+/// Splits a nameref target of the form `name[index]`.
+fn split_subscript(target: &str) -> Option<(&str, &str)> {
+    let (name, rest) = target.split_once('[')?;
+    Some((name, rest.strip_suffix(']')?))
+}
+
 /// Represents the policy for looking up variables in a shell environment.
 #[derive(Clone, Copy)]
 pub enum EnvironmentLookup {
@@ -220,6 +244,49 @@ impl ShellEnvironment {
         None
     }
 
+    /// sill: follows namerefs from `name`: while the variable it names is a nameref with a
+    /// target, moves on to the target, looked up anew from the innermost scope (bash's
+    /// dynamic scoping). A target `name[index]` ends the chain at that array element.
+    ///
+    /// # Errors
+    ///
+    /// A chain that loops, or follows more than [`MAX_NAMEREF_DEPTH`] namerefs, is a circular
+    /// name reference.
+    pub fn resolve_nameref(&self, name: &str) -> Result<NamerefTarget, error::Error> {
+        let mut current = name.to_owned();
+        for _ in 0..=MAX_NAMEREF_DEPTH {
+            let target = match self.get(&current) {
+                Some((_, var)) if var.is_treated_as_nameref() => match var.value() {
+                    ShellValue::String(t) if !t.is_empty() => t.clone(),
+                    _ => return Ok(NamerefTarget::Variable(current)),
+                },
+                _ => return Ok(NamerefTarget::Variable(current)),
+            };
+            if let Some((base, index)) = split_subscript(&target) {
+                let base = match self.resolve_nameref(base)? {
+                    NamerefTarget::Variable(b) => b,
+                    NamerefTarget::Element { .. } => base.to_owned(),
+                };
+                return Ok(NamerefTarget::Element {
+                    name: base,
+                    index: index.to_owned(),
+                });
+            }
+            current = target;
+        }
+        Err(error::ErrorKind::CircularNameReference(name.to_owned()).into())
+    }
+
+    /// sill: the variable `name` leads to through namerefs (see `resolve_nameref`): the
+    /// variable itself if it isn't a nameref, `None` if the chain ends at an array element
+    /// or loops.
+    pub fn get_resolved(&self, name: &str) -> Option<(EnvironmentScope, &ShellVariable)> {
+        match self.resolve_nameref(name) {
+            Ok(NamerefTarget::Variable(target)) => self.get(target),
+            _ => None,
+        }
+    }
+
     /// Tries to retrieve the string value of the variable with the given name in the
     /// environment.
     ///
@@ -232,8 +299,14 @@ impl ShellEnvironment {
         name: S,
         shell: &Shell<SE>,
     ) -> Option<Cow<'_, str>> {
-        self.get(name.as_ref())
-            .map(|(_, v)| v.value().to_cow_str(shell))
+        // sill: through namerefs.
+        match self.resolve_nameref(name.as_ref()).ok()? {
+            NamerefTarget::Variable(target) => self.get(target).map(|(_, v)| v.value().to_cow_str(shell)),
+            NamerefTarget::Element { name, index } => {
+                let (_, var) = self.get(name)?;
+                var.value().get_at(&index, shell).ok().flatten().map(|v| Cow::Owned(v.into_owned()))
+            }
+        }
     }
 
     /// Checks if a variable of the given name is set in the environment.
@@ -242,10 +315,13 @@ impl ShellEnvironment {
     ///
     /// * `name` - The name of the variable to check.
     pub fn is_set<S: AsRef<str>>(&self, name: S) -> bool {
-        if let Some((_, var)) = self.get(name) {
-            !matches!(var.value(), ShellValue::Unset(_))
-        } else {
-            false
+        // sill: through namerefs. One to an array element is looked up by its whole target
+        // (`arr[1]`) as a name, as bash does, which is never set.
+        match self.resolve_nameref(name.as_ref()) {
+            Ok(NamerefTarget::Variable(n)) => self
+                .get(n)
+                .is_some_and(|(_, var)| !matches!(var.value(), ShellValue::Unset(_))),
+            Ok(NamerefTarget::Element { .. }) | Err(_) => false,
         }
     }
 
@@ -260,6 +336,18 @@ impl ShellEnvironment {
     ///
     /// * `name` - The name of the variable to unset.
     pub fn unset(&mut self, name: &str) -> Result<Option<ShellVariable>, error::Error> {
+        // sill: through namerefs (`unset -n` uses `unset_raw`).
+        match self.resolve_nameref(name)? {
+            NamerefTarget::Variable(target) => self.unset_raw(&target),
+            NamerefTarget::Element { name, index } => {
+                self.unset_index(&name, &index)?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// sill: unsets the variable `name` itself, even a nameref (`unset -n`).
+    pub fn unset_raw(&mut self, name: &str) -> Result<Option<ShellVariable>, error::Error> {
         let mut local_count = 0;
         for (scope_type, map) in self.scopes.iter_mut().rev() {
             if matches!(scope_type, EnvironmentScope::Local) {
@@ -296,6 +384,11 @@ impl ShellEnvironment {
     /// * `name` - The name of the array variable to unset an element from.
     /// * `index` - The index of the element to unset.
     pub fn unset_index(&mut self, name: &str, index: &str) -> Result<bool, error::Error> {
+        // sill: through namerefs.
+        let name = match self.resolve_nameref(name)? {
+            NamerefTarget::Variable(n) => n,
+            NamerefTarget::Element { .. } => return Ok(false),
+        };
         if let Some((_, var)) = self.get_mut(name) {
             var.unset_index(index)
         } else {
@@ -373,6 +466,25 @@ impl ShellEnvironment {
     ) -> Result<(), error::Error> {
         let name = name.into();
 
+        // sill: through namerefs; a nameref's target is looked up anywhere.
+        let (name, lookup_policy) = match self.resolve_nameref(&name)? {
+            NamerefTarget::Variable(target) if target == name => (name, lookup_policy),
+            NamerefTarget::Variable(target) => (target, EnvironmentLookup::Anywhere),
+            NamerefTarget::Element { name: array, index } => {
+                let variables::ShellValueLiteral::Scalar(value) = value else {
+                    return Err(error::ErrorKind::AssigningListToArrayMember.into());
+                };
+                return self.update_or_add_array_element(
+                    array,
+                    index,
+                    value,
+                    updater,
+                    EnvironmentLookup::Anywhere,
+                    scope_if_creating,
+                );
+            }
+        };
+
         let auto_export = self.export_variables_on_modification;
         if let Some(var) = self.get_mut_using_policy(&name, lookup_policy) {
             var.assign(value, false)?;
@@ -412,6 +524,15 @@ impl ShellEnvironment {
         scope_if_creating: EnvironmentScope,
     ) -> Result<(), error::Error> {
         let name = name.into();
+
+        // sill: through namerefs; one that names an array element can't take a subscript.
+        let (name, lookup_policy) = match self.resolve_nameref(&name)? {
+            NamerefTarget::Variable(target) if target == name => (name, lookup_policy),
+            NamerefTarget::Variable(target) => (target, EnvironmentLookup::Anywhere),
+            NamerefTarget::Element { .. } => {
+                return Err(error::ErrorKind::AssigningListToArrayMember.into());
+            }
+        };
 
         if let Some(var) = self.get_mut_using_policy(&name, lookup_policy) {
             var.assign_at_index(index, value, false)?;

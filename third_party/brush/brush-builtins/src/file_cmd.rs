@@ -42,7 +42,10 @@ struct Kind {
 }
 
 fn kind(desc: impl Into<String>, mime: impl Into<String>) -> Kind {
-    Kind { desc: desc.into(), mime: mime.into() }
+    Kind {
+        desc: desc.into(),
+        mime: mime.into(),
+    }
 }
 
 fn u16_at(b: &[u8], o: usize) -> Option<u16> {
@@ -77,16 +80,32 @@ fn pe(b: &[u8]) -> Option<Kind> {
         1 => "(native)",
         _ => "",
     };
-    let what = if characteristics & 0x2000 != 0 { "executable (DLL)" } else { "executable" };
-    Some(kind(format!("{bits} {what} {subsystem} {machine}, for MS Windows").replace("  ", " "), "application/vnd.microsoft.portable-executable"))
+    let what = if characteristics & 0x2000 != 0 {
+        "executable (DLL)"
+    } else {
+        "executable"
+    };
+    Some(kind(
+        format!("{bits} {what} {subsystem} {machine}, for MS Windows").replace("  ", " "),
+        "application/vnd.microsoft.portable-executable",
+    ))
 }
 
 fn script(first_line: &str) -> Kind {
     let line = first_line.trim_start_matches("#!").trim();
     let mut words = line.split_whitespace();
-    let mut interp = words.next().unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("").to_owned();
+    let mut interp = words
+        .next()
+        .unwrap_or("")
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_owned();
     if interp == "env" {
-        interp = words.find(|w| !w.starts_with('-')).unwrap_or("").to_owned();
+        words
+            .find(|w| !w.starts_with('-'))
+            .unwrap_or("")
+            .clone_into(&mut interp);
     }
     let (desc, mime) = match interp.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.') {
         "bash" => ("Bourne-Again shell script", "text/x-shellscript"),
@@ -109,13 +128,21 @@ fn text(b: &[u8]) -> Option<Kind> {
     } else if b.starts_with(b"\xff\xfe") || b.starts_with(b"\xfe\xff") {
         let le = b.starts_with(b"\xff\xfe");
         return Some(kind(
-            format!("Unicode text, UTF-16, {}-endian text", if le { "little" } else { "big" }),
+            format!(
+                "Unicode text, UTF-16, {}-endian text",
+                if le { "little" } else { "big" }
+            ),
             format!("text/plain; charset=utf-16{}", if le { "le" } else { "be" }),
         ));
-    } else if b.iter().all(|&c| c != 0 && (c >= 0x20 || matches!(c, b'\t' | b'\n' | b'\r' | 0x0c | 0x1b))) {
+    } else if b
+        .iter()
+        .all(|&c| c != 0 && (c >= 0x20 || matches!(c, b'\t' | b'\n' | b'\r' | 0x0c | 0x1b)))
+    {
         if b.is_ascii() {
             (b, "ASCII text", "us-ascii")
-        } else if std::str::from_utf8(b).is_ok() || std::str::from_utf8(&b[..b.len().saturating_sub(3)]).is_ok() {
+        } else if std::str::from_utf8(b).is_ok()
+            || std::str::from_utf8(&b[..b.len().saturating_sub(3)]).is_ok()
+        {
             (b, "Unicode text, UTF-8 text", "utf-8")
         } else {
             (b, "ISO-8859 text", "iso-8859-1")
@@ -123,7 +150,7 @@ fn text(b: &[u8]) -> Option<Kind> {
     } else {
         return None;
     };
-    if body.iter().any(|&c| c == 0) {
+    if body.contains(&0) {
         return None;
     }
     let (mut crlf, mut lf, mut cr, mut longest, mut cur) = (0usize, 0usize, 0usize, 0usize, 0usize);
@@ -155,13 +182,21 @@ fn text(b: &[u8]) -> Option<Kind> {
     if longest > 300 {
         parts.push(format!("very long lines ({longest})"));
     }
-    let terms: Vec<&str> = [(crlf, "CRLF"), (cr, "CR"), (lf, "LF")].iter().filter(|(n, _)| *n > 0).map(|(_, s)| *s).collect();
+    let terms: Vec<&str> = [(crlf, "CRLF"), (cr, "CR"), (lf, "LF")]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(_, s)| *s)
+        .collect();
     match terms.as_slice() {
         [] if !body.is_empty() => parts.push("no line terminators".to_owned()),
         ["LF"] | [] => {}
         _ => parts.push(format!("{} line terminators", terms.join(", "))),
     }
-    let desc = if parts.is_empty() { enc.to_owned() } else { format!("{enc}, with {}", parts.join(", with ")) };
+    let desc = if parts.is_empty() {
+        enc.to_owned()
+    } else {
+        format!("{enc}, with {}", parts.join(", with "))
+    };
     Some(kind(desc, format!("text/plain; charset={charset}")))
 }
 
@@ -180,12 +215,36 @@ fn identify(b: &[u8]) -> Kind {
         (b"\x1f\x8b", "gzip compressed data", "application/gzip"),
         (b"BZh", "bzip2 compressed data", "application/x-bzip2"),
         (b"\xfd7zXZ\0", "XZ compressed data", "application/x-xz"),
-        (b"7z\xbc\xaf\x27\x1c", "7-zip archive data", "application/x-7z-compressed"),
-        (b"\x28\xb5\x2f\xfd", "Zstandard compressed data", "application/zstd"),
-        (b"SQLite format 3\0", "SQLite 3.x database", "application/vnd.sqlite3"),
-        (b"\0asm", "WebAssembly (wasm) binary module", "application/wasm"),
-        (b"MSCF", "Microsoft Cabinet archive data", "application/vnd.ms-cab-compressed"),
-        (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "Composite Document File V2 Document", "application/x-ole-storage"),
+        (
+            b"7z\xbc\xaf\x27\x1c",
+            "7-zip archive data",
+            "application/x-7z-compressed",
+        ),
+        (
+            b"\x28\xb5\x2f\xfd",
+            "Zstandard compressed data",
+            "application/zstd",
+        ),
+        (
+            b"SQLite format 3\0",
+            "SQLite 3.x database",
+            "application/vnd.sqlite3",
+        ),
+        (
+            b"\0asm",
+            "WebAssembly (wasm) binary module",
+            "application/wasm",
+        ),
+        (
+            b"MSCF",
+            "Microsoft Cabinet archive data",
+            "application/vnd.ms-cab-compressed",
+        ),
+        (
+            b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",
+            "Composite Document File V2 Document",
+            "application/x-ole-storage",
+        ),
     ];
     if b.starts_with(b"MZ") {
         if let Some(k) = pe(b) {
@@ -193,13 +252,24 @@ fn identify(b: &[u8]) -> Kind {
         }
     }
     if b.starts_with(b"\x7fELF") {
-        let bits = if b.get(4) == Some(&2) { "64-bit" } else { "32-bit" };
-        return kind(format!("ELF {bits} LSB executable"), "application/x-executable");
+        let bits = if b.get(4) == Some(&2) {
+            "64-bit"
+        } else {
+            "32-bit"
+        };
+        return kind(
+            format!("ELF {bits} LSB executable"),
+            "application/x-executable",
+        );
     }
     for (m, desc, mime) in magic {
         if b.starts_with(m) {
             let desc = if *m == b"%PDF-" {
-                let v: String = b[5..].iter().take_while(|c| c.is_ascii_digit() || **c == b'.').map(|&c| c as char).collect();
+                let v: String = b[5..]
+                    .iter()
+                    .take_while(|c| c.is_ascii_digit() || **c == b'.')
+                    .map(|&c| c as char)
+                    .collect();
                 format!("{desc}, version {v}")
             } else {
                 (*desc).to_owned()
@@ -232,24 +302,34 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for FileCommand {
     ) -> Result<ExecutionResult, Self::Error> {
         let name = context.command_name.clone();
         if self.files.is_empty() {
-            writeln!(context.stderr(), "Usage: {name} [-bi] [--mime-type] FILE...")?;
+            writeln!(
+                context.stderr(),
+                "Usage: {name} [-bi] [--mime-type] FILE..."
+            )?;
             return Ok(ExecutionExitCode::InvalidUsage.into());
         }
         let width = self.files.iter().map(|f| f.len()).max().unwrap_or(0) + 1;
         let mut status = ExecutionResult::success();
         for f in &self.files {
-            let path = brush_core::sys::fs::map_shell_path(std::path::Path::new(f)).unwrap_or_else(|| f.into());
+            let path = brush_core::sys::fs::map_shell_path(std::path::Path::new(f))
+                .unwrap_or_else(|| f.into());
             let path = context.shell.absolute_path(&path);
             let k = match std::fs::metadata(&path) {
                 Err(e) => {
                     status = ExecutionResult::general_error();
-                    let why = if e.kind() == std::io::ErrorKind::NotFound { "No such file or directory".to_owned() } else { e.to_string() };
+                    let why = if e.kind() == std::io::ErrorKind::NotFound {
+                        "No such file or directory".to_owned()
+                    } else {
+                        e.to_string()
+                    };
                     kind(format!("cannot open `{f}' ({why})"), "inode/x-error")
                 }
                 Ok(m) if m.is_dir() => kind("directory", "inode/directory"),
                 Ok(_) => {
                     let mut head = vec![0u8; 64 * 1024];
-                    let n = std::fs::File::open(&path).and_then(|mut fh| fh.read(&mut head)).unwrap_or(0);
+                    let n = std::fs::File::open(&path)
+                        .and_then(|mut fh| fh.read(&mut head))
+                        .unwrap_or(0);
                     head.truncate(n);
                     identify(&head)
                 }
@@ -286,12 +366,21 @@ mod tests {
     #[test]
     fn text_and_line_endings() {
         assert_eq!(d(b"a\nb\n"), "ASCII text");
-        assert_eq!(d(b"[server]\r\nport=1\r\n"), "ASCII text, with CRLF line terminators");
+        assert_eq!(
+            d(b"[server]\r\nport=1\r\n"),
+            "ASCII text, with CRLF line terminators"
+        );
         assert_eq!(d(b"a\r\nb\n"), "ASCII text, with CRLF, LF line terminators");
         assert_eq!(d(b"no newline"), "ASCII text, with no line terminators");
         assert_eq!(d("café\n".as_bytes()), "Unicode text, UTF-8 text");
-        assert_eq!(d(b"\xef\xbb\xbfx\r\n"), "Unicode text, UTF-8 (with BOM) text, with CRLF line terminators");
-        assert_eq!(d(b"\xff\xfeh\0i\0"), "Unicode text, UTF-16, little-endian text");
+        assert_eq!(
+            d(b"\xef\xbb\xbfx\r\n"),
+            "Unicode text, UTF-8 (with BOM) text, with CRLF line terminators"
+        );
+        assert_eq!(
+            d(b"\xff\xfeh\0i\0"),
+            "Unicode text, UTF-16, little-endian text"
+        );
         assert!(d(&[b'x'; 400]).contains("very long lines (400)"));
         assert_eq!(d(b""), "empty");
         assert_eq!(d(b"\0\x01\x02bin"), "data");
@@ -299,9 +388,18 @@ mod tests {
 
     #[test]
     fn scripts() {
-        assert_eq!(d(b"#!/usr/bin/env bash\necho\n"), "Bourne-Again shell script, ASCII text executable");
-        assert_eq!(d(b"#!/bin/sh\r\necho\r\n"), "POSIX shell script, ASCII text executable, with CRLF line terminators");
-        assert_eq!(d(b"#!/usr/bin/env python3\nprint()\n"), "Python script, ASCII text executable");
+        assert_eq!(
+            d(b"#!/usr/bin/env bash\necho\n"),
+            "Bourne-Again shell script, ASCII text executable"
+        );
+        assert_eq!(
+            d(b"#!/bin/sh\r\necho\r\n"),
+            "POSIX shell script, ASCII text executable, with CRLF line terminators"
+        );
+        assert_eq!(
+            d(b"#!/usr/bin/env python3\nprint()\n"),
+            "Python script, ASCII text executable"
+        );
     }
 
     #[test]
@@ -318,7 +416,10 @@ mod tests {
         assert_eq!(d(&pe), "PE32+ executable (console) x86-64, for MS Windows");
         pe[0x96..0x98].copy_from_slice(&0x2022u16.to_le_bytes());
         pe[0x98 + 68..0x98 + 70].copy_from_slice(&2u16.to_le_bytes());
-        assert_eq!(d(&pe), "PE32+ executable (DLL) (GUI) x86-64, for MS Windows");
+        assert_eq!(
+            d(&pe),
+            "PE32+ executable (DLL) (GUI) x86-64, for MS Windows"
+        );
         assert_eq!(d(b"\x89PNG\r\n\x1a\n...."), "PNG image data");
         assert_eq!(d(b"%PDF-1.7\n"), "PDF document, version 1.7");
         assert_eq!(d(b"PK\x03\x04rest"), "Zip archive data");

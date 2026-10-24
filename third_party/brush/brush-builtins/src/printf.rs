@@ -31,13 +31,19 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PrintfCommand {
         self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
+        // sill: conversion errors (`printf %d abc`) go to this command's stderr, in bash's
+        // wording, before the output they're part of, and make it fail; uucore would print
+        // them to the process's stderr.
+        format::capture_errors();
+        let mut output: Vec<u8> = vec![];
+        let formatted = format(self.format_and_args.as_slice(), &mut output);
+        let errors = format::take_captured_errors();
+        for e in &errors {
+            writeln!(context.stderr(), "{}: {e}", context.command_name)?;
+        }
         if let Some(variable_name) = &self.output_variable {
-            // Format to a u8 vector.
-            let mut result: Vec<u8> = vec![];
-            format(self.format_and_args.as_slice(), &mut result)?;
-
-            // Convert to a string.
-            let result_str = String::from_utf8(result).map_err(|_| {
+            formatted?;
+            let result_str = String::from_utf8(output).map_err(|_| {
                 brush_core::ErrorKind::PrintfInvalidUsage("invalid UTF-8 output".into())
             })?;
 
@@ -50,11 +56,17 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for PrintfCommand {
             )
             .await?;
         } else {
-            format(self.format_and_args.as_slice(), context.stdout())?;
-            context.stdout().flush()?;
+            // What was formatted before a failure is still written, as bash does.
+            let mut stdout = context.stdout();
+            stdout.write_all(&output)?;
+            stdout.flush()?;
+            formatted?;
         }
-
-        Ok(ExecutionResult::success())
+        Ok(if errors.is_empty() {
+            ExecutionResult::success()
+        } else {
+            ExecutionResult::general_error()
+        })
     }
 }
 
@@ -88,15 +100,25 @@ fn format_via_uucore(
     // doesn't, then we must only run through it once -- even when extra arguments are provided --
     // since otherwise we'd loop forever waiting for arguments that will never be consumed. This
     // matches the behavior of other shells, which print such a format string exactly once.
-    let format_consumes_args = format_items
-        .iter()
-        .any(|(item, _)| matches!(item, format::FormatItem::Spec(_)));
+    let format_consumes_args = format_items.iter().any(|piece| {
+        matches!(
+            piece,
+            Piece::Item(format::FormatItem::Spec(_), _) | Piece::Time { .. }
+        )
+    });
 
     // Keep going until we've exhausted all format arguments. Also make sure to run at least once
     // even if there's no format arguments.
     while format_args.is_empty() || !format_args_wrapper.is_exhausted() {
         // Process all format items, in order. We'll bail when we're told to stop.
-        for (item, backslash_quote) in &format_items {
+        for piece in &format_items {
+            let (item, backslash_quote) = match piece {
+                Piece::Item(item, backslash_quote) => (item, backslash_quote),
+                Piece::Time { format, width, align_left } => {
+                    write_time(&mut writer, &mut format_args_wrapper, format, *width, *align_left)?;
+                    continue;
+                }
+            };
             if let (format::FormatItem::Spec(format::Spec::QuotedString { position }), true) =
                 (item, *backslash_quote)
             {
@@ -153,7 +175,123 @@ fn quote_printf_q(s: &str) -> String {
 
 type ParsedFormatItem = (format::FormatItem<format::EscapedChar>, bool);
 
-fn parse_format_string(format_string: &str) -> Result<Vec<ParsedFormatItem>, brush_core::Error> {
+/// A piece of a format string: what uucore formats, or (sill) bash's `%(datefmt)T`, which
+/// uucore doesn't know.
+enum Piece {
+    Item(format::FormatItem<format::EscapedChar>, bool),
+    Time {
+        format: String,
+        width: usize,
+        align_left: bool,
+    },
+}
+
+/// sill: splits `%[-][width](datefmt)T` specs out of a format string; the text between them
+/// goes to uucore.
+fn parse_format_string(format_string: &str) -> Result<Vec<Piece>, brush_core::Error> {
+    let mut pieces = Vec::new();
+    let mut literal_start = 0;
+    let mut i = 0;
+    let bytes = format_string.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        if bytes.get(i + 1) == Some(&b'%') {
+            i += 2;
+            continue;
+        }
+        if let Some((spec_len, time)) = parse_time_spec(&format_string[i..]) {
+            let literal = &format_string[literal_start..i];
+            pieces.extend(parse_uucore_items(literal)?.into_iter().map(|(item, q)| Piece::Item(item, q)));
+            pieces.push(time);
+            i += spec_len;
+            literal_start = i;
+            continue;
+        }
+        i += 1;
+    }
+    pieces.extend(
+        parse_uucore_items(&format_string[literal_start..])?
+            .into_iter()
+            .map(|(item, q)| Piece::Item(item, q)),
+    );
+    Ok(pieces)
+}
+
+/// Parses `%[-][width](datefmt)T` at the start of `s`: its length and the piece.
+fn parse_time_spec(s: &str) -> Option<(usize, Piece)> {
+    let after_percent = s.strip_prefix('%')?;
+    let (align_left, after_flag) = match after_percent.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, after_percent),
+    };
+    let digits = after_flag.chars().take_while(char::is_ascii_digit).count();
+    let (width, after_width) = after_flag.split_at(digits);
+    let inner_and_rest = after_width.strip_prefix('(')?;
+    let (format, after) = inner_and_rest.split_once(")T")?;
+    let consumed = s.len() - after.len();
+    Some((
+        consumed,
+        Piece::Time {
+            format: format.to_owned(),
+            width: width.parse().unwrap_or(0),
+            align_left,
+        },
+    ))
+}
+
+/// sill: writes the next argument (seconds since the epoch; empty or -1 for now, -2 for
+/// the shell's start, also taken as now) as a local time in `datefmt` (strftime), padded
+/// to `width`. An empty format is `%X`, as in bash.
+fn write_time(
+    mut writer: impl Write,
+    args: &mut format::FormatArguments<'_>,
+    datefmt: &str,
+    width: usize,
+    align_left: bool,
+) -> Result<(), brush_core::Error> {
+    use chrono::TimeZone as _;
+    use std::fmt::Write as _;
+
+    // The argument, through uucore's own cursor: a `%s` written to a buffer.
+    let mut as_s: &[u8] = b"s";
+    let spec = format::Spec::parse(&mut as_s)
+        .map_err(|_| ErrorKind::PrintfInvalidUsage("printf: %T".into()))?;
+    let mut arg = Vec::new();
+    let _: ControlFlow<()> = format::FormatItem::<format::EscapedChar>::Spec(spec)
+        .write(&mut arg, args)
+        .map_err(|e| ErrorKind::PrintfInvalidUsage(format!("printf formatting error: {e}")))?;
+    let arg = String::from_utf8_lossy(&arg);
+    let secs: i64 = match arg.trim() {
+        "" => -1,
+        n => n.parse().unwrap_or(-1),
+    };
+    let time = if secs < 0 {
+        chrono::Local::now()
+    } else {
+        chrono::Local
+            .timestamp_opt(secs, 0)
+            .single()
+            .unwrap_or_else(chrono::Local::now)
+    };
+    let datefmt = if datefmt.is_empty() { "%X" } else { datefmt };
+    let mut text = String::new();
+    // An unknown conversion makes chrono's formatter fail; then the format is shown as is.
+    if write!(text, "{}", time.format(datefmt)).is_err() {
+        text = datefmt.to_owned();
+    }
+    let padded = if align_left {
+        format!("{text:<width$}")
+    } else {
+        format!("{text:>width$}")
+    };
+    writer.write_all(padded.as_bytes())?;
+    Ok(())
+}
+
+fn parse_uucore_items(format_string: &str) -> Result<Vec<ParsedFormatItem>, brush_core::Error> {
     let format_items: Result<Vec<_>, _> = format::parse_spec_and_escape(format_string.as_bytes())
         .map(|result| match result {
             Ok(item @ format::FormatItem::Spec(format::Spec::QuotedString { .. })) => {

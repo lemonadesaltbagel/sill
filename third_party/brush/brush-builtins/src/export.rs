@@ -83,7 +83,14 @@ impl ExportCommand {
                 }
                 // Try to find the variable already present; if we find it, then mark it
                 // exported.
-                else if let Some((_, variable)) = context.shell.env_mut().get_mut(s) {
+                // sill: a nameref exports (or unexports) the variable it refers to.
+                else if let Some((_, variable)) = {
+                    let target = match context.shell.env().resolve_nameref(s)? {
+                        brush_core::env::NamerefTarget::Variable(t) => t,
+                        brush_core::env::NamerefTarget::Element { .. } => s.clone(),
+                    };
+                    context.shell.env_mut().get_mut(target)
+                } {
                     if self.unexport {
                         variable.unexport();
                     } else {

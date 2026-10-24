@@ -71,8 +71,21 @@ struct Resource {
     settable: bool,
 }
 
-const fn res(opt: char, name: &'static str, unit: &'static str, soft: Value, hard: Value) -> Resource {
-    Resource { opt, name, unit, soft, hard, settable: true }
+const fn res(
+    opt: char,
+    name: &'static str,
+    unit: &'static str,
+    soft: Value,
+    hard: Value,
+) -> Resource {
+    Resource {
+        opt,
+        name,
+        unit,
+        soft,
+        hard,
+        settable: true,
+    }
 }
 
 /// Git Bash's values, except where it reports a Cygwin limit Windows doesn't have (open
@@ -82,7 +95,14 @@ static LIMITS: Mutex<[Resource; 9]> = Mutex::new([
     res('d', "data seg size", "kbytes", None, None),
     res('f', "file size", "blocks", None, None),
     res('n', "open files", "", Some(8192), None),
-    Resource { opt: 'p', name: "pipe size", unit: "512 bytes", soft: Some(8), hard: Some(8), settable: false },
+    Resource {
+        opt: 'p',
+        name: "pipe size",
+        unit: "512 bytes",
+        soft: Some(8),
+        hard: Some(8),
+        settable: false,
+    },
     res('s', "stack size", "kbytes", Some(8192), None),
     res('t', "cpu time", "seconds", None, None),
     res('u', "max user processes", "", None, None),
@@ -115,12 +135,18 @@ impl ULimitCommand {
             (self.u, 'u'),
             (self.v, 'v'),
         ];
-        flags.iter().filter(|(on, _)| *on).map(|(_, c)| *c).collect()
+        flags
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, c)| *c)
+            .collect()
     }
 
     /// Runs the command; output lines go to `out`, errors to `err`.
     fn run(&self, out: &mut Vec<String>, err: &mut Vec<String>) -> ExecutionExitCode {
-        let mut limits = LIMITS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut limits = LIMITS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut opts = self.selected();
         if self.all {
             opts = limits.iter().map(|r| r.opt).collect();
@@ -154,13 +180,13 @@ impl ULimitCommand {
                 "unlimited" => None,
                 "hard" => r.hard,
                 "soft" => r.soft,
-                n => match n.parse::<u64>() {
-                    Ok(n) => Some(n),
-                    Err(_) => {
+                n => {
+                    let Ok(n) = n.parse::<u64>() else {
                         err.push(format!("{n}: invalid number"));
                         return ExecutionExitCode::GeneralError;
-                    }
-                },
+                    };
+                    Some(n)
+                }
             };
             // Without -S or -H, both limits are set.
             let (set_soft, set_hard) = (self.soft || !self.hard, self.hard || !self.soft);
@@ -169,7 +195,10 @@ impl ULimitCommand {
                 && (!set_soft || set_hard || within(value, r.hard))
                 && (set_soft || within(r.soft, value));
             if !allowed {
-                err.push(format!("{}: cannot modify limit: Operation not permitted", r.name));
+                err.push(format!(
+                    "{}: cannot modify limit: Operation not permitted",
+                    r.name
+                ));
                 status = ExecutionExitCode::GeneralError;
                 continue;
             }
@@ -180,6 +209,7 @@ impl ULimitCommand {
                 r.soft = value;
             }
         }
+        drop(limits);
         status
     }
 }
@@ -208,7 +238,9 @@ mod tests {
     use super::*;
 
     fn run(args: &[&str]) -> (u8, Vec<String>, Vec<String>) {
-        let cmd = ULimitCommand::try_parse_from(std::iter::once("ulimit").chain(args.iter().copied())).unwrap();
+        let cmd =
+            ULimitCommand::try_parse_from(std::iter::once("ulimit").chain(args.iter().copied()))
+                .unwrap();
         let (mut out, mut err) = (vec![], vec![]);
         let status = cmd.run(&mut out, &mut err);
         (status.into(), out, err)

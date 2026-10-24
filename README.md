@@ -19,7 +19,7 @@ sill takes each of these on directly, with a test for each.
 
 All measured on Windows 11 with the Git Bash that ships with Git for Windows as the comparison.
 
-**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 56 cases covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
+**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 56 cases, run through `bash.exe -c` and through the MCP server (56/56 both ways) covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
 
 | | sill | Git Bash |
 |---|---|---|
@@ -45,7 +45,11 @@ The pass counts are close. The difference is in the failed calls and the time it
 
 Given the choice, the models moved their shell work to sill: all of it under Gemini CLI, most of it under Codex.
 
-**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,177 of 2,911 runnable cases. Most of the remainder are features brush doesn't have yet on any platform: namerefs (`declare -n`) alone are 207 cases.
+**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,428 of 2,911 runnable cases on Windows (83%). The rest are mostly:
+- Unix signals and job control, which Windows has no equivalent for;
+- `coproc`;
+- debugging options (`extdebug`, `functrace`) and rarely used `declare` forms;
+- differences in Git Bash itself, such as its `/usr/bin` paths.
 
 ## Install
 
@@ -57,7 +61,12 @@ Given the choice, the models moved their shell work to sill: all of it under Gem
 The installer unpacks to `%LOCALAPPDATA%\Programs\sill`. The options:
 - `-AddToPath` puts sill on your user PATH.
 - `-ClaudeCode` points Claude Code's Bash tool at sill, in `~\.claude\settings.json`. Your other settings are kept, and the old file is saved as `settings.json.bak`.
-- `-Mcp codex,gemini` adds sill's MCP server to Codex CLI (`~\.codex\config.toml`) and/or Gemini CLI (`~\.gemini\settings.json`), merged with what's there, the old file saved as `.bak`. Approvals stay as you've set them in the client.
+- `-Mcp codex,gemini,claude` adds sill's MCP server to any of these:
+  - Codex CLI (`~\.codex\config.toml`);
+  - Gemini CLI (`~\.gemini\settings.json`);
+  - Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`).
+
+  Each is merged with what's there, and the old file is saved as `.bak`. Approvals stay as you've set them in the client.
 
 Nothing else on the machine is changed.
 
@@ -67,7 +76,7 @@ Nothing else on the machine is changed.
 |---|---|
 | Claude Code | `CLAUDE_CODE_GIT_BASH_PATH` = `...\sill\bash.exe` (what `-ClaudeCode` sets) |
 | opencode | `SHELL` = `...\sill\bash.exe` |
-| Codex CLI, Gemini CLI | As an MCP server: `-Mcp codex,gemini` |
+| Codex CLI, Gemini CLI, Claude Desktop | As an MCP server: `-Mcp codex,gemini,claude` |
 | any MCP client | Command `...\sill\bash.exe`, arguments `--mcp` (stdio). Allow tool calls up to 11 minutes |
 
 ### The MCP server

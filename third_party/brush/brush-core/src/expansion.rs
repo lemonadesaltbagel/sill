@@ -1348,6 +1348,22 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                     ) => Ok(expanded_parameter),
                     _ => {
                         let result = self.basic_expand_to_str(error_message).await?;
+                        // sill: bash's wording: `name: message`, or `name: parameter null or
+                        // not set` with no message.
+                        let what = match &parameter {
+                            brush_parser::word::Parameter::Positional(n) => n.to_string(),
+                            brush_parser::word::Parameter::Special(s) => s.to_string(),
+                            brush_parser::word::Parameter::Named(n)
+                            | brush_parser::word::Parameter::NamedWithIndex { name: n, .. }
+                            | brush_parser::word::Parameter::NamedWithAllIndices { name: n, .. } => {
+                                n.clone()
+                            }
+                        };
+                        let result = if result.is_empty() {
+                            format!("{what}: parameter null or not set")
+                        } else {
+                            format!("{what}: {result}")
+                        };
                         let err: error::Error =
                             error::ErrorKind::CheckedExpansionError(result).into();
 
@@ -1753,7 +1769,8 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                 variable_name,
                 concatenate,
             } => {
-                let keys = if let Some((_, var)) = self.shell.env().get(variable_name) {
+                // sill: through namerefs.
+                let keys = if let Some((_, var)) = self.shell.env().get_resolved(&variable_name) {
                     var.value().element_keys(self.shell)
                 } else {
                     vec![]
@@ -1847,6 +1864,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         &self,
         parameter: &brush_parser::word::Parameter,
     ) -> (Option<String>, Option<String>, Option<ShellVariable>) {
+        // sill: through namerefs.
+        let Ok(Some(resolved)) = self.resolve_nameref_parameter(parameter) else {
+            return (None, None, None);
+        };
+        let parameter = &resolved;
         let (name, index) = match parameter {
             brush_parser::word::Parameter::Positional(_)
             | brush_parser::word::Parameter::Special(_) => (None, None),
@@ -1865,6 +1887,50 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
             .and_then(|name| self.shell.env().get(name).map(|(_, var)| var.clone()));
 
         (name, index, var)
+    }
+
+    /// sill: the parameter a nameref stands for (`declare -n`): `$ref` is `$target`, and
+    /// `${arr[i]}` for a nameref to an element (`${arr[@]}` for one to `arr[@]`). `None`
+    /// where bash expands to nothing: a subscript on a nameref to an element, or a circular
+    /// nameref (after bash's warning).
+    fn resolve_nameref_parameter(
+        &self,
+        parameter: &brush_parser::word::Parameter,
+    ) -> Result<Option<brush_parser::word::Parameter>, error::Error> {
+        use brush_parser::word::Parameter;
+        use crate::env::NamerefTarget;
+
+        let name = match parameter {
+            Parameter::Named(n)
+            | Parameter::NamedWithIndex { name: n, .. }
+            | Parameter::NamedWithAllIndices { name: n, .. } => n,
+            Parameter::Positional(_) | Parameter::Special(_) => return Ok(Some(parameter.clone())),
+        };
+        let target = match self.shell.env().resolve_nameref(name) {
+            Ok(t) => t,
+            Err(e) => {
+                writeln!(self.params.stderr(self.shell), "{e}")?;
+                return Ok(None);
+            }
+        };
+        Ok(match (parameter, target) {
+            (_, NamerefTarget::Variable(t)) if &t == name => Some(parameter.clone()),
+            (Parameter::Named(_), NamerefTarget::Variable(t)) => Some(Parameter::Named(t)),
+            (Parameter::NamedWithIndex { index, .. }, NamerefTarget::Variable(t)) => {
+                Some(Parameter::NamedWithIndex { name: t, index: index.clone() })
+            }
+            (Parameter::NamedWithAllIndices { concatenate, .. }, NamerefTarget::Variable(t)) => {
+                Some(Parameter::NamedWithAllIndices { name: t, concatenate: *concatenate })
+            }
+            (Parameter::Named(_), NamerefTarget::Element { name, index }) => {
+                if index == "@" || index == "*" {
+                    Some(Parameter::NamedWithAllIndices { name, concatenate: index == "*" })
+                } else {
+                    Some(Parameter::NamedWithIndex { name, index })
+                }
+            }
+            _ => None,
+        })
     }
 
     fn undefined_expansion(
@@ -1905,6 +1971,23 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         indirect: bool,
         allow_unset_vars: bool,
     ) -> Result<Expansion, error::Error> {
+        // sill: `${!ref}` of a nameref is the name it finally refers to, not an indirection.
+        if indirect
+            && let brush_parser::word::Parameter::Named(name) = parameter
+            && let Some((_, var)) = self.shell.env().get(name)
+            && var.is_treated_as_nameref()
+        {
+            if !matches!(var.value(), ShellValue::String(t) if !t.is_empty()) {
+                return Ok(Expansion::undefined());
+            }
+            return Ok(match self.shell.env().resolve_nameref(name)? {
+                crate::env::NamerefTarget::Variable(target) => Expansion::from(target),
+                crate::env::NamerefTarget::Element { name, index } => {
+                    Expansion::from(format!("{name}[{index}]"))
+                }
+            });
+        }
+
         let expansion = self
             .expand_parameter_without_indirect(parameter, allow_unset_vars)
             .await?;
@@ -1925,6 +2008,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         parameter: &brush_parser::word::Parameter,
         allow_unset_vars: bool,
     ) -> Result<Expansion, error::Error> {
+        // sill: through namerefs.
+        let Some(resolved) = self.resolve_nameref_parameter(parameter)? else {
+            return Ok(Expansion::undefined());
+        };
+        let parameter = &resolved;
         match parameter {
             brush_parser::word::Parameter::Positional(p) => {
                 if *p == 0 {

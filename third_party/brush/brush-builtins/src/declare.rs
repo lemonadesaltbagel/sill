@@ -251,6 +251,7 @@ impl DeclareCommand {
         true
     }
 
+    #[expect(clippy::too_many_lines)]
     fn process_declaration(
         &self,
         context: &mut brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
@@ -294,11 +295,19 @@ impl DeclareCommand {
             return Ok(false);
         }
 
-        // Figure out where we should look.
-        let lookup = if create_var_local {
-            EnvironmentLookup::OnlyInCurrent(EnvironmentScope::Local)
-        } else {
-            EnvironmentLookup::Anywhere
+        // Figure out where we should look (sill: and at what, through namerefs, with integer
+        // values evaluated).
+        let target = self.resolve_target(
+            context,
+            declaration,
+            verb,
+            name,
+            create_var_local,
+            initial_value,
+        )?;
+        let (name, lookup, initial_value) = match target {
+            Target::Proceed(name, lookup, initial_value) => (name, lookup, initial_value),
+            Target::Done(ok) => return Ok(ok),
         };
 
         // `local -I x[=v]` / `declare -I` (bash 5.0+): the new local inherits
@@ -393,6 +402,97 @@ impl DeclareCommand {
         }
 
         Ok(true)
+    }
+
+    /// sill: what a declaration acts on, and with what value: without -n/+n, through a
+    /// nameref to what it refers to; with -n, after checking the target; for an integer
+    /// variable, with its value evaluated. `Target::Done` ends the declaration there.
+    fn resolve_target(
+        &self,
+        context: &mut brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+        declaration: &brush_core::CommandArg,
+        verb: DeclareVerb,
+        name: String,
+        create_var_local: bool,
+        initial_value: Option<ShellValueLiteral>,
+    ) -> Result<Target, brush_core::Error> {
+        let lookup = if create_var_local {
+            EnvironmentLookup::OnlyInCurrent(EnvironmentScope::Local)
+        } else {
+            EnvironmentLookup::Anywhere
+        };
+        let mut name = name;
+        // bash refuses a nameref that is also an integer, creating nothing.
+        if self.make_nameref.to_bool() == Some(true) && self.make_integer.to_bool() == Some(true) {
+            return Ok(Target::Done(false));
+        }
+        if self.make_nameref.to_bool() == Some(true) && !self.makes_array() {
+            // The target must be a variable name (or an array element), and not the nameref.
+            if let Some(ShellValueLiteral::Scalar(target)) = &initial_value {
+                let base = target.split_once('[').map_or(target.as_str(), |(b, _)| b);
+                if !env::valid_variable_name(base) {
+                    writeln!(
+                        context.stderr(),
+                        "{}: `{target}': invalid variable name for name reference",
+                        context.command_name
+                    )?;
+                    return Ok(Target::Done(false));
+                }
+                if *target == name {
+                    writeln!(
+                        context.stderr(),
+                        "{}: {name}: nameref variable self references not allowed",
+                        context.command_name
+                    )?;
+                    return Ok(Target::Done(false));
+                }
+            }
+        } else if self.make_nameref.to_bool().is_none()
+            && context
+                .shell
+                .env()
+                .get_using_policy(name.as_str(), lookup)
+                .is_some_and(|var| var.is_treated_as_nameref())
+        {
+            // Without -n/+n, attributes and a value apply to what the nameref refers to (for
+            // one to an array element, the array).
+            name = match context.shell.env().resolve_nameref(name.as_str())? {
+                env::NamerefTarget::Variable(target) => target,
+                // `readonly` of a nameref to an element leaves the array alone, as in bash.
+                env::NamerefTarget::Element { .. } if matches!(verb, DeclareVerb::Readonly) => {
+                    return Ok(Target::Done(true));
+                }
+                env::NamerefTarget::Element { name: array, .. } => array,
+            };
+        }
+        let lookup = if name_was_redirected(&name, declaration) {
+            EnvironmentLookup::Anywhere
+        } else {
+            lookup
+        };
+
+        // An integer variable evaluates its value arithmetically (`declare -i x=20+5`).
+        let mut initial_value = initial_value;
+        let integer = match self.make_integer.to_bool() {
+            Some(flag) => flag,
+            None => context
+                .shell
+                .env()
+                .get_using_policy(name.as_str(), lookup)
+                .is_some_and(|var| var.is_treated_as_integer()),
+        };
+        if integer && let Some(ShellValueLiteral::Scalar(expr)) = &initial_value {
+            let parsed = brush_parser::arithmetic::parse(expr)?;
+            let n = context.shell.eval_arithmetic(&parsed)?;
+            initial_value = Some(ShellValueLiteral::Scalar(n.to_string()));
+        }
+
+        Ok(Target::Proceed(name, lookup, initial_value))
+    }
+
+    /// sill: whether the declaration makes an array (`-a` or `-A`).
+    const fn makes_array(&self) -> bool {
+        self.make_indexed_array.is_some() || self.make_associative_array.is_some()
     }
 
     #[expect(clippy::type_complexity)]
@@ -659,7 +759,8 @@ impl DeclareCommand {
             }
         }
         if let Some(value) = self.make_nameref.to_bool() {
-            if value {
+            // sill: an array attribute wins over -n, as in bash.
+            if value && !self.makes_array() {
                 var.treat_as_nameref();
             } else {
                 var.unset_treat_as_nameref();
@@ -710,4 +811,23 @@ impl DeclareCommand {
 
         Ok(())
     }
+}
+
+/// sill: whether `name` is no longer the name the declaration gave (a nameref was followed).
+fn name_was_redirected(name: &str, declaration: &brush_core::CommandArg) -> bool {
+    let given = match declaration {
+        brush_core::CommandArg::String(s) => s.split_once('[').map_or(s.as_str(), |(b, _)| b),
+        brush_core::CommandArg::Assignment(a) => match &a.name {
+            ast::AssignmentName::VariableName(n) | ast::AssignmentName::ArrayElementName(n, _) => n,
+        },
+    };
+    name != given
+}
+
+/// sill: what a declaration goes on to act on (see `DeclareCommand::resolve_target`).
+enum Target {
+    /// Declare this name, looked up this way, with this value.
+    Proceed(String, EnvironmentLookup, Option<ShellValueLiteral>),
+    /// The declaration is over, successfully or not.
+    Done(bool),
 }

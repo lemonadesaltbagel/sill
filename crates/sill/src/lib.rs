@@ -246,7 +246,7 @@ mod tools {
         let mut dirs = vec![];
         // sill's own directory first, so `bash script.sh` and `#!/bin/bash` run sill, not
         // whatever other bash.exe is on PATH (Git's, or WSL's launcher).
-        if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)) {
+        if let Some(exe_dir) = real_exe().and_then(|e| e.parent().map(PathBuf::from)) {
             dirs.push(exe_dir);
         }
         if !std::env::var_os("SILL_NO_TOOLS").is_some_and(|v| !v.is_empty() && v != "0")
@@ -289,8 +289,22 @@ mod tools {
         }
     }
 
-    fn tools_dir() -> Option<PathBuf> {
+    /// The executable's real path. Started through a link (winget puts one for a portable
+    /// package in its Links folder), `current_exe` is the link's path, whose directory has
+    /// no `tools`.
+    fn real_exe() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
+        let Ok(real) = std::fs::canonicalize(&exe) else { return Some(exe) };
+        let real = real.to_string_lossy();
+        let plain = match real.strip_prefix(r"\\?\UNC\") {
+            Some(unc) => format!(r"\\{unc}"),
+            None => real.strip_prefix(r"\\?\").unwrap_or(&real).to_owned(),
+        };
+        Some(PathBuf::from(plain))
+    }
+
+    fn tools_dir() -> Option<PathBuf> {
+        let exe = real_exe()?;
         let dir = exe.parent()?.join("tools");
         dir.is_dir().then_some(dir)
     }

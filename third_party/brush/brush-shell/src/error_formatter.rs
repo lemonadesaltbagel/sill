@@ -9,13 +9,15 @@ impl brush_core::extensions::ErrorFormatter for Formatter {
         err: &brush_core::error::Error,
         shell: &brush_core::Shell<impl brush_core::ShellExtensions>,
     ) -> String {
-        // sill: bash's shape, `<name>: <message>` (e.g. `bash: foo: command not found`),
-        // which is what models expect and parse, rather than `error: <message>`.
-        let name = shell_label(shell);
+        // sill: bash's shape, `<name>: line <n>: <message>` (e.g. `build.sh: line 3: foo:
+        // command not found`), which is what models expect and parse, rather than
+        // `error: <message>`.
+        let prefix = shell.diagnostic_prefix();
         let prefix = if self.use_color {
-            color_print::cformat!("<red>{name}:</red> ")
+            color_print::cformat!("<red>{}</red>", prefix.trim_end())
+                + " "
         } else {
-            format!("{name}: ")
+            prefix
         };
 
         let message = match err.kind() {
@@ -28,16 +30,6 @@ impl brush_core::extensions::ErrorFormatter for Formatter {
 
         std::format!("{prefix}{message}\n")
     }
-}
-
-/// The name bash puts before its messages: the running script's, or else the shell's,
-/// as a bare file name (`bash`, not `C:\...\bash.exe`).
-fn shell_label(shell: &brush_core::Shell<impl brush_core::ShellExtensions>) -> String {
-    let name = shell.current_shell_name();
-    let name = name.as_deref().unwrap_or("bash");
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let base = base.strip_suffix(".exe").unwrap_or(base);
-    if base.is_empty() { "bash".to_owned() } else { base.to_owned() }
 }
 
 /// sill: for Linux-only commands agents reach for, the Windows way to do it, so a

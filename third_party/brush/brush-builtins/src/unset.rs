@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io::Write as _;
 
 use clap::Parser;
 
@@ -48,8 +49,22 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for UnsetCommand {
         //
         // TODO(nameref): implement nameref
         //
+        // sill: `unset -n ref` unsets the nameref itself, not its target; a name that isn't a
+        // nameref is left alone, as in bash.
         if self.name_interpretation.name_references {
-            return brush_core::error::unimp("unset: name references are not yet implemented");
+            let mut result = ExecutionResult::success();
+            for name in &self.names {
+                let is_nameref = context
+                    .shell
+                    .env()
+                    .get(name.as_str())
+                    .is_some_and(|(_, var)| var.is_treated_as_nameref());
+                if is_nameref && let Err(e) = context.shell.env_mut().unset_raw(name.as_str()) {
+                    writeln!(context.stderr(), "{}: {name}: cannot unset: {e}", context.command_name)?;
+                    result = ExecutionResult::general_error();
+                }
+            }
+            return Ok(result);
         }
 
         let unspecified = self.name_interpretation.unspecified();
@@ -101,9 +116,10 @@ fn unset_array_index(
     index: &str,
 ) -> Result<bool, brush_core::Error> {
     // First check to see if it's an associative array.
+    // sill: through namerefs.
     let is_assoc_array = shell
         .env()
-        .get(name)
+        .get_resolved(name)
         .is_some_and(|(_, var)| var.value().is_associative_array());
 
     // Compute which index we should actually use. For indexed arrays, we need to evaluate
