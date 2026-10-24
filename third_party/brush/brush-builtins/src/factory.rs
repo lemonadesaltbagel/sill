@@ -166,6 +166,9 @@ pub fn default_builtins<SE: brush_core::ShellExtensions>(
         "msvc-env".into(),
         builtins::Registration::of::<msvc_env::MsvcEnvCommand>(),
     );
+    // sill: the edit command Codex's models use; see apply_patch.rs.
+    #[cfg(windows)]
+    m.insert("apply_patch".into(), builtins::Registration::of::<apply_patch::ApplyPatchCommand>());
     // sill: what a file is (line endings, text or binary); see file_cmd.rs.
     #[cfg(windows)]
     m.insert("file".into(), builtins::Registration::of::<file_cmd::FileCommand>());

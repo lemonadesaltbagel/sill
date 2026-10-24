@@ -76,6 +76,9 @@ mod kill_windows;
 // sill: compiled everywhere for its tests; registered on Windows.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod msvc_env;
+// sill: Codex's apply_patch; compiled everywhere for its tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod apply_patch;
 // sill: file(1) for line endings and file types on Windows; compiled everywhere for tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod file_cmd;

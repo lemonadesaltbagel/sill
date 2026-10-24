@@ -62,7 +62,7 @@ jobs:
         run: cargo test --release -p sill -p sill-winargs -p sill-errno
       - name: Unit tests of the Windows layer
         working-directory: third_party/brush
-        run: cargo test --release -p brush-core -p brush-builtins --lib -- "sys::" "ulimit_windows"
+        run: cargo test --release -p brush-core -p brush-builtins --lib -- "sys::" "ulimit_windows" "apply_patch"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tools

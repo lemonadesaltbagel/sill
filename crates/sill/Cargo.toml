@@ -1,6 +1,6 @@
 [package]
 name = "sill"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent-first Bash runtime for native Windows (drop-in bash.exe)"
 edition.workspace = true
 rust-version.workspace = true
@@ -19,7 +19,15 @@ path = "src/bin/bash.rs"
 # Non-interactive backends only: agents pipe or pass commands, no line editor needed.
 # (`basic` is offered on Unix; Windows uses `minimal`.)
 brush-shell = { path = "../../third_party/brush/brush-shell", default-features = false, features = ["basic", "minimal", "experimental-bundled-coreutils"] }
+# `bash.exe mcp`: the MCP server (src/mcp.rs).
+rmcp = { version = "3.7", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1"
+serde = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "fs", "io-std", "sync"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The invisible console (src/lib.rs `console`); same version as brush-core's.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Threading"] }

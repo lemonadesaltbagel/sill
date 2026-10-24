@@ -1,6 +1,6 @@
 # sill
 
-**Bash for coding agents on native Windows.** sill is a drop-in `bash.exe`: a Bash interpreter (a fork of [brush](https://github.com/reubeno/brush)) with a Windows adapter built for the way agents run commands. It needs no Git, MSYS2 or WSL. Point Claude Code, opencode or Codex at it, and the agent's shell commands behave the way the model expects from Linux, on Windows' own programs and files.
+**Bash for coding agents on native Windows.** sill is a drop-in `bash.exe`: a Bash interpreter (a fork of [brush](https://github.com/reubeno/brush)) with a Windows adapter built for the way agents run commands. It needs no Git, MSYS2 or WSL. Point Claude Code, opencode or Codex at it, or add it to Codex CLI or Gemini CLI as an MCP server, and the agent's shell commands behave the way the model expects from Linux, on Windows' own programs and files.
 
 ## Why
 
@@ -36,6 +36,15 @@ All measured on Windows 11 with the Git Bash that ships with Git for Windows as 
 
 The pass counts are close. The difference is in the failed calls and the time it took to get there.
 
+**As an MCP server**, added to each harness as it comes (PowerShell remains its own shell), on the same tasks:
+
+| harness | with sill's MCP server | PowerShell only |
+|---|---|---|
+| Codex CLI | **36/36** passed, **10** failed calls of 119, **501 s** | 35/36, 44 of 208, 1094 s |
+| Gemini CLI | **36/36**, 5 of 90, **335 s** | 31/36, 5 of 150, 1195 s |
+
+Given the choice, the models moved their shell work to sill: all of it under Gemini CLI, most of it under Codex.
+
 **Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,177 of 2,911 runnable cases. Most of the remainder are features brush doesn't have yet on any platform: namerefs (`declare -n`) alone are 207 cases.
 
 ## Install
@@ -48,6 +57,7 @@ The pass counts are close. The difference is in the failed calls and the time it
 The installer unpacks to `%LOCALAPPDATA%\Programs\sill`. The options:
 - `-AddToPath` puts sill on your user PATH.
 - `-ClaudeCode` points Claude Code's Bash tool at sill, in `~\.claude\settings.json`. Your other settings are kept, and the old file is saved as `settings.json.bak`.
+- `-Mcp codex,gemini` adds sill's MCP server to Codex CLI (`~\.codex\config.toml`) and/or Gemini CLI (`~\.gemini\settings.json`), merged with what's there, the old file saved as `.bak`. Approvals stay as you've set them in the client.
 
 Nothing else on the machine is changed.
 
@@ -57,7 +67,17 @@ Nothing else on the machine is changed.
 |---|---|
 | Claude Code | `CLAUDE_CODE_GIT_BASH_PATH` = `...\sill\bash.exe` (what `-ClaudeCode` sets) |
 | opencode | `SHELL` = `...\sill\bash.exe` |
-| Codex CLI | Codex starts bash only when the model asks for `shell: "bash"`. Put sill first on PATH and ask for bash in `AGENTS.md` |
+| Codex CLI, Gemini CLI | As an MCP server: `-Mcp codex,gemini` |
+| any MCP client | Command `...\sill\bash.exe`, arguments `--mcp` (stdio). Allow tool calls up to 11 minutes |
+
+### The MCP server
+
+`bash.exe --mcp` gives the model three tools:
+- `bash` runs a command and returns its stdout, stderr and exit code. The working directory and exported variables carry over to the next call; functions and aliases don't. A timeout (default 2 minutes, at most 10) ends the command and every program it started. With `run_in_background`, it starts a server or watcher and returns a job id at once.
+- `bash_output` reads a background job's new output.
+- `bash_kill` stops a background job and everything it started.
+
+Each command runs in a fresh sill process, so a crash or a hang can't take the server down. A program the command leaves running can't hold the call open either.
 
 ## What's inside
 
@@ -67,6 +87,7 @@ Nothing else on the machine is changed.
 - **`#!` scripts** run through their interpreter: `./build.sh`, `./gradlew`, `#!/usr/bin/env python3`. `sh` is sill.
 - **`cmd /c '... >nul'`:** Claude Code rewrites `>nul` to `>/dev/null`; sill reads that back as `nul`.
 - **`exec`** runs the program and exits with its status, so wrapper scripts work.
+- **`apply_patch`**, the file-editing command Codex's models are trained on, takes its patch from stdin or as an argument, and keeps each file's line endings.
 - **Background jobs** (`server > log 2>&1 &`) don't hold the harness's output pipe. `kill`, `pkill` and `killall` end whole process trees, but never the harness or the Windows session's processes.
 
 **Paths and text**
@@ -131,7 +152,7 @@ This gives `target\release\bash.exe`. The bundled tools are cross-built on Linux
 
 | path | what |
 |---|---|
-| `crates/sill` | The app: `bash.exe` and `sill.exe`, the console and environment setup, and the tests that replay Claude Code's shell contract |
+| `crates/sill` | The app: `bash.exe` and `sill.exe`, the console and environment setup, the MCP server (`src/mcp.rs`), and the tests that replay Claude Code's shell contract |
 | `crates/sill-winargs` | argv to Windows command line, checked against `spec/argv-test-vectors.json` |
 | `crates/sill-errno` | POSIX wording for Windows error codes |
 | `third_party/brush` | The Bash interpreter, vendored; sill's changes are marked `sill:` |
@@ -139,6 +160,4 @@ This gives `target\release\bash.exe`. The bundled tools are cross-built on Linux
 | `third_party/gnu-tools`, `third_party/busybox-w32` | What the GNU and busybox builds add: a UTF-8 manifest, the args-file shim, a sed patch |
 | `scripts/` | Building the tools, packaging, installing, and checking the distribution |
 
-## Next
-
-An MCP server mode (`bash.exe mcp`) for harnesses that can't be pointed at a `bash.exe`: Codex with its PowerShell default, Gemini CLI, Copilot CLI, and chat clients. See [CHANGELOG.md](CHANGELOG.md) for what each release changed.
+See [CHANGELOG.md](CHANGELOG.md) for what each release changed.

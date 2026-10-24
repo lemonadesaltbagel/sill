@@ -6,6 +6,11 @@ pub fn run() {
     if std::env::args_os().nth(1).is_some_and(|a| a == console::HELPER_ARG) {
         console::run_helper();
     }
+    if std::env::args_os().nth(1).is_some_and(|a| a == mcp::ENV_DUMP_ARG)
+        && let Some(file) = std::env::args_os().nth(2)
+    {
+        mcp::dump_env(&file);
+    }
     trace_invocation();
     if std::env::args_os().skip(1).eq(["--version"]) {
         println!(
@@ -29,12 +34,17 @@ pub fn run() {
             eprintln!("{note}");
         }
     }
+    if std::env::args_os().skip(1).eq([mcp::ARG]) {
+        mcp::serve();
+    }
 
     brush_shell::entry::run();
 }
 
 #[cfg_attr(not(windows), allow(dead_code, reason = "used on Windows; tested everywhere"))]
 mod script_hint;
+
+mod mcp;
 
 /// `SILL_TRACE=<file>` appends each invocation's arguments and working directory to the
 /// file, one JSON line each: what a harness actually ran, after its own rewriting.

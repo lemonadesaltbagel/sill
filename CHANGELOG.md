@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 (2026-10-23)
+
+### MCP server
+- **`bash.exe --mcp`** runs sill as an MCP server (stdio), for harnesses whose own shell is PowerShell (Codex CLI, Gemini CLI) and clients with none. Tools:
+  - `bash`: runs a command. The working directory and exported variables carry over to the next call. A timeout (default 2 minutes, at most 10) ends the command and everything it started.
+  - `bash_output` and `bash_kill`: read and stop background jobs (`run_in_background`).
+- **`install-windows.ps1 -Mcp codex,gemini`** registers it in each client's config.
+
+### Running things
+- **`apply_patch`**, the file-editing command Codex's models use, is a builtin. It takes the patch from stdin or as an argument, and keeps each file's line endings.
+
 ## 0.2.0 (2026-10-23)
 
 The first release published in this repository. `bash --version` now names sill (`sill 0.2.0 (brush 0.4.0, git:...)`).
