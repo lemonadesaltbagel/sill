@@ -53,6 +53,15 @@ Given the choice, the models moved their shell work to sill: all of it under Gem
 
 ## Install
 
+With [Scoop](https://scoop.sh):
+
+    scoop bucket add sill https://github.com/lemonadesaltbagel/scoop-sill
+    scoop install sill/sill
+
+This puts `sill` on PATH. The drop-in `bash.exe` is `~\scoop\apps\sill\current\bash.exe`; see [With an agent harness](#with-an-agent-harness).
+
+Or with the installer script:
+
 1. Download `sill-windows-x64.zip` and `install-windows.ps1` from the [latest release](../../releases/latest).
 2. In PowerShell, run:
 
