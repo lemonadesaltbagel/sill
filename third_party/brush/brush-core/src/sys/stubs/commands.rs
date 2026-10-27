@@ -62,8 +62,15 @@ pub(crate) fn exec(_command: std::process::Command) -> std::io::Error {
 /// exec. Returns only if the program can't start.
 #[cfg(windows)]
 pub(crate) fn exec(mut command: std::process::Command) -> std::io::Error {
-    let status = match command.spawn() {
-        Ok(mut child) => child.wait(),
+    // The program starts suspended (see `sys::job`): it joins a foreground job first.
+    let status = match crate::sys::job::start_std(&mut command) {
+        Ok((mut child, job)) => {
+            let status = child.wait();
+            if let Some(job) = job {
+                job.release();
+            }
+            status
+        }
         Err(err) => return err,
     };
     let code = status.map_or(126, |s| s.code().unwrap_or(1));

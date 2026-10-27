@@ -99,6 +99,13 @@ def run_case(case, shell, echoargs, timeout, mcp=False):
                 ok = bool(case["check"](out, err, code, secs))
             except Exception:  # noqa: BLE001
                 ok = False
+        if case.get("after_running"):
+            time.sleep(1)
+            alive = processes_with(case["after_running"])
+            if not alive:
+                ok = False
+                err += f"\n[not running any more: {case['after_running']}]".encode()
+            end([l.split()[0] for l in alive])
         if case.get("after_no_process"):
             left = processes_with(case["after_no_process"])
             if left:
@@ -243,7 +250,11 @@ def main():
             continue
         results[case["id"]] = {}
         for name, path in shells:
-            r = run_case(case, path, os.path.abspath(a.echoargs), a.timeout, mcp=name in mcp_names)
+            if name in mcp_names and case.get("direct_only"):
+                results[case["id"]][name] = {"pass": True, "code": 0, "secs": 0, "stdout": "(direct only)", "stderr": ""}
+                continue
+            r = run_case(case, path, os.path.abspath(a.echoargs), case.get("timeout", a.timeout),
+                         mcp=name in mcp_names)
             results[case["id"]][name] = r
         print(f"{case['id']:28} " + " ".join(f"{n}={'pass' if results[case['id']][n]['pass'] else 'FAIL'}"
                                               for n, _ in shells), flush=True)

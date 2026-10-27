@@ -77,7 +77,7 @@ The installer unpacks to `%LOCALAPPDATA%\Programs\sill`. The options:
 
   Each is merged with what's there, and the old file is saved as `.bak`. Approvals stay as you've set them in the client.
 
-Nothing else on the machine is changed.
+The installer changes nothing else. sill itself creates one folder: `\tmp` on the current drive, for `/tmp` (see [Known limits](#known-limits)).
 
 ### With an agent harness
 
@@ -95,7 +95,9 @@ Nothing else on the machine is changed.
 - `bash_output` reads a background job's new output.
 - `bash_kill` stops a background job and everything it started.
 
-Each command runs in a fresh sill process, so a crash or a hang can't take the server down. A program the command leaves running can't hold the call open either.
+Each command runs in a fresh sill process, inside a Job Object it joins before it starts. So a crash or a hang can't take the server down, and a timeout or `bash_kill` ends every program the command started. Programs a command leaves running become a background job: the result says so, `bash_output` and `bash_kill` work on them, and they end with the session.
+
+The first command runs in the project the client names (its MCP roots), if it offers one. Otherwise it runs where the client started the server, or in your home folder when that's the client's own install folder (as Claude Desktop does). `SILL_MCP_ROOT` sets it explicitly.
 
 ## What's inside
 
@@ -147,8 +149,13 @@ A value you've already set is kept. All of these are visible with `env`.
 
 ## Known limits
 
+- **`/tmp` is `\tmp` on the current drive**, as Windows and Claude Code's own file tools read `/tmp/x`. sill creates the folder when it's missing. Mind three things:
+  - It's a different folder on each drive: what was written to `/tmp` while working on `D:` isn't there from `C:`.
+  - It's created at the drive's root and inherits that folder's permissions: on a machine several people use, the others can typically change files in it, as in a `/tmp` without the sticky bit.
+  - Use `$TMPDIR` (your user's temporary folder) for anything private.
 - **Windows has no signals.** Traps for INT and TERM are accepted and listed, but only `EXIT`, `ERR`, `DEBUG` and `RETURN` run. `kill` ends processes.
 - **Unsupported:** `coproc`, stopped jobs (`fg` after Ctrl+Z), passing descriptors above 2 to a program, `exec -a`, and `cp <(cmd) file`.
+- **Programs a finished command leaves running keep running** (`start`, an editor, a build daemon), as from a terminal. A command killed before it finishes, by a harness's timeout for one, takes everything it started with it. Through the MCP server, such leftovers become a background job of the session and end with it.
 - **Process substitution** passes a named pipe (`\\.\pipe\...`), which programs open like a file.
 - **Elevation:** when sill runs elevated, network drives mapped in your normal session aren't visible to it, as for any elevated program.
 - **No `sudo`, `apt` or `systemctl`:** sill doesn't emulate Linux administration. These commands fail with a note naming the Windows way.

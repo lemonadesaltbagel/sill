@@ -313,6 +313,8 @@ fn spawn_async_ao_list_in_task<'a, SE: extensions::ShellExtensions>(
     // `Shell::async_pid_sink`); if it finishes without starting one, there's none.
     let pid_slot = std::sync::Arc::new(std::sync::OnceLock::new());
     cloned_shell.async_pid_sink = Some(pid_slot.clone());
+    // sill: the job's programs run in one job that outlives the shell (see `sys::job`).
+    cloned_shell.background_job = sys::job::new_background();
     let task_pid_slot = pid_slot.clone();
 
     // The job runs in a shell of its own, so only its status leaves it.

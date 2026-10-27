@@ -270,6 +270,7 @@ pub fn compose_launch_request<S: AsRef<str>, SE: extensions::ShellExtensions>(
         open_files: context.iter_fds().into(),
         process_group: processes::ProcessGroup::Inherit,
         kill_on_drop: context.shell.options().kill_external_commands_on_drop,
+        background_job: context.shell.background_job.clone(),
     }
 }
 
@@ -760,8 +761,12 @@ pub(crate) fn execute_external_command(
     match context.shell.process_launcher().spawn(request) {
         Ok(child) => {
             // sill: in a background job, the first native process started is its `$!`.
-            if let (Some(sink), Some(pid)) = (&context.shell.async_pid_sink, child.pid()) {
-                let _ = sink.set(Some(pid));
+            if let (Some(sink), Some(pid)) = (&context.shell.async_pid_sink, child.pid())
+                && sink.set(Some(pid)).is_ok()
+                && let Some(job) = &context.shell.background_job
+            {
+                // `kill $!` ends the whole job (see `sys::job`).
+                sys::job::register_background(pid, job);
             }
             Ok(ExecutionSpawnResult::StartedProcess(child))
         }

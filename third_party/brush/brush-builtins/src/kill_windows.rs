@@ -217,6 +217,12 @@ pub(crate) mod win {
     /// Ends `pid` and every process it started (deepest first, so none is orphaned and
     /// restarted by a parent in between), each with `exit_code`.
     pub(crate) fn terminate_tree(pid: i32, exit_code: u32) -> Result<(), &'static str> {
+        // A background job's `$!`: its Job Object holds every process it started, even
+        // ones whose parent has exited (`cmd /c start /b server &`), which a walk through
+        // parent PIDs can't find.
+        if let Some(job) = brush_core::sys::job::background_job_of(pid) {
+            return if job.terminate(exit_code) { Ok(()) } else { Err("no such process") };
+        }
         let root = to_u32(pid)?;
         // Open the root first: a missing or protected target is the error to report.
         let root_handle = open(root, PROCESS_TERMINATE)?;

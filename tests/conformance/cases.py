@@ -17,6 +17,10 @@ Fields:
   check     fn(out: bytes, err: bytes, code: int, secs: float) -> bool
   needs     programs that must exist on the machine for the case to apply
   after_no_process  a command-line fragment no process may still have after the case
+  after_running     a command-line fragment a process must still have after the case (it
+                    is then stopped)
+  timeout   seconds after which the shell is killed, as a harness's timeout does
+  direct_only  not run through the MCP server (whose sessions end what commands leave behind)
 """
 
 import json
@@ -131,6 +135,18 @@ CASES = [
      "why": "`kill $!` on a wrapper (npm.cmd, cmd /c) stops what it started, not just the wrapper.",
      "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'ping -n 41 127.0.0.1 >nul' & sleep 1; kill $!; sleep 1; echo done",
      "expect": "done\n", "after_no_process": "-n 41"},
+    {"id": "proc-kill-orphan", "cat": "process",
+     "why": "`kill $!` also stops what a wrapper started and left behind when it exited (`npx`, `cmd /c start`): the dev server that otherwise keeps its port.",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'start /b ping -n 42 127.0.0.1 >nul' & sleep 2; kill $! 2>/dev/null; sleep 1; echo done",
+     "expect": "done\n", "after_no_process": "-n 42"},
+    {"id": "proc-harness-timeout", "cat": "process",
+     "why": "When a harness kills the shell at its timeout, what the command started ends too, not only the shell.",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'ping -n 43 127.0.0.1 >nul'; echo never",
+     "timeout": 3, "check": lambda o, e, c, s: b"never" not in o, "after_no_process": "-n 43"},
+    {"id": "proc-detached-survives", "cat": "process",
+     "why": "A program a finished command deliberately left running (`start`, an editor, a build daemon) keeps running after the shell exits.",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'start /b ping -n 44 127.0.0.1 >nul'; echo started",
+     "expect": "started\n", "after_running": "-n 44", "direct_only": True},
     {"id": "proc-bg-releases-pipe", "cat": "process",
      "why": "A background job doesn't keep the harness's output pipe open (harnesses wait for it).",
      "script": "ping -n 20 127.0.0.1 >/dev/null 2>&1 & echo started",

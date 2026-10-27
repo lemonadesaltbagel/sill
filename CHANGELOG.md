@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Process lifetimes (Windows Job Objects)
+- **Every program sill starts joins a Job Object before it runs.** A process tree followed through parent PIDs loses processes whose parent has exited, and so does `taskkill /T`, how harnesses stop commands. A job doesn't.
+  - **`kill $!`** ends everything a background job started, including what a wrapper that already exited left behind (`npx`, `cmd /c start`): no more dev server holding its port.
+  - **Killed mid-command** (a harness's timeout), sill takes everything the command started with it.
+  - **A command that finishes normally** leaves what it deliberately started running (`start`, an editor, a build daemon), as from a terminal.
+- **MCP server:** commands join their job before starting (no window for a grandchild to escape). Programs a command leaves running become a background job of the session, reported in the result, and end with the session. The first command runs in the client's project root, or the home folder rather than a client's install folder.
+- **MCP output in the system's code page:** a line that isn't UTF-8 (Java since JEP 400 writes GBK into a pipe on Chinese Windows) is read in the ANSI code page when that reads it cleanly.
+
+### Checks
+- **The build runs the evidence:** the 56 conformance cases (directly and through MCP; all must pass), brush's compat suite on Windows against Git Bash (no failure beyond a committed baseline), and on Linux against bash.
+- **Builtins' diagnostics** are written a line at a time, not a byte at a time.
+
+### Docs
+- **`/tmp` semantics** are in Known limits: one folder per drive, created at the drive's root with its permissions.
+
 ## 0.4.0 (2026-10-24)
 
 ### Installing

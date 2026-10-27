@@ -167,6 +167,9 @@ pub struct LaunchRequest {
     /// Whether to kill the process if the shell drops the [`ChildProcess`] for it
     /// before it exits.
     pub kill_on_drop: bool,
+    /// sill: the background job the process joins (Windows; see `sys::job`). `None` gives
+    /// it a foreground job of its own.
+    pub background_job: Option<std::sync::Arc<crate::sys::job::Job>>,
 }
 
 /// The process group a process should run in. Platforms and

@@ -250,6 +250,7 @@ impl<SE: extensions::ShellExtensions> Default for Shell<SE> {
             error_formatter: SE::ErrorFormatter::default(),
             process_launcher: SE::ProcessLauncher::default(),
             async_pid_sink: None,
+            background_job: None,
             builtin_states: builtins::BuiltinStates::default(),
             traps: traps::TrapHandlerConfig::default(),
             open_files: openfiles::OpenFiles::default(),

@@ -71,6 +71,11 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     #[cfg_attr(feature = "serde", serde(skip, default))]
     pub(crate) async_pid_sink: Option<std::sync::Arc<std::sync::OnceLock<Option<crate::sys::process::ProcessId>>>>,
 
+    /// sill: the job a background job's programs run in (see `sys::job`); `None` in the
+    /// foreground, where each program gets a job of its own. Inherited by subshells.
+    #[cfg_attr(feature = "serde", serde(skip, default))]
+    pub(crate) background_job: Option<std::sync::Arc<crate::sys::job::Job>>,
+
     /// The builtins' state; see [`crate::ExecutionContext::state_mut`].
     #[cfg_attr(feature = "serde", serde(skip, default))]
     builtin_states: builtins::BuiltinStates,
@@ -167,6 +172,7 @@ impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
             error_formatter: self.error_formatter.clone(),
             process_launcher: self.process_launcher.clone(),
             async_pid_sink: self.async_pid_sink.clone(),
+            background_job: self.background_job.clone(),
             builtin_states: self.builtin_states.clone(),
             traps: self.traps.clone(),
             open_files: self.open_files.clone(),
@@ -236,6 +242,7 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
             error_formatter: options.error_formatter,
             process_launcher: options.process_launcher,
             async_pid_sink: None,
+            background_job: None,
             builtin_states: builtins::BuiltinStates::default(),
             open_files: openfiles::OpenFiles::new(),
             options: runtime_options,
