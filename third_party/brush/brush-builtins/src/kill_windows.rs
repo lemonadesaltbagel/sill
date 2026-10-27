@@ -41,7 +41,7 @@ brush_clap_adapter::impl_parse_args!(KillCommand);
 fn parse_signal(spec: &str) -> Option<i32> {
     match spec.parse::<TrapSignal>() {
         Ok(TrapSignal::Signal(s)) => Some(s as i32),
-        Ok(TrapSignal::Exit) if spec == "0" => Some(0),
+        Ok(TrapSignal::Exit) if spec.parse::<i32>() == Ok(0) => Some(0),
         _ => None,
     }
 }

@@ -2,7 +2,7 @@
 # today; see tests/compat/check_baseline.py. Regenerate from the build's compat.json.
 # Mostly Git Bash's own differences (its /usr/bin paths, MSYS behavior) and what Windows
 # lacks (signals, coproc, descriptors above 2 for programs).
-succeeded >= 2428
+succeeded >= 2433
 arguments.yaml: -c mode -- torture
 arguments.yaml: script -- torture
 builtins/alias.yaml: Alias body with tilde expansion
@@ -40,7 +40,6 @@ builtins/kill.yaml: kill -sigspec (numeric)
 builtins/kill.yaml: kill continues a job sent SIGTERM that stopped again in the background
 builtins/kill.yaml: kill continues a stopped job sent SIGTERM, so it can act on it
 builtins/kill.yaml: kill sends SIGTERM by default
-builtins/kill.yaml: kill takes -N after a signal as a process group
 builtins/pushd_popd_dirs.yaml: Basic pushd usage
 builtins/pushd_popd_dirs.yaml: basic dirs usage
 builtins/pushd_popd_dirs.yaml: dirs to clear
