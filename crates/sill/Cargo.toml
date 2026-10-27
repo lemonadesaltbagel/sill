@@ -19,6 +19,8 @@ path = "src/bin/bash.rs"
 # Non-interactive backends only: agents pipe or pass commands, no line editor needed.
 # (`basic` is offered on Unix; Windows uses `minimal`.)
 brush-shell = { path = "../../third_party/brush/brush-shell", default-features = false, features = ["basic", "minimal", "experimental-bundled-coreutils"] }
+# Job Objects for the MCP server's commands (src/mcp.rs `tree`).
+brush-core = { path = "../../third_party/brush/brush-core" }
 # `bash.exe mcp`: the MCP server (src/mcp.rs).
 rmcp = { version = "3.7", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1"

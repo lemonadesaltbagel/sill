@@ -394,7 +394,12 @@ fn msvc_env_builds_caches_and_hints() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("hello.c"), "#include <stdio.h>\nint main(void){puts(\"hello from msvc\");return 0;}\n").unwrap();
 
-    let r = common::run(&["-c", "msvc-env --refresh && cl /nologo hello.c /Fe:hello.exe >/dev/null && ./hello.exe"], Some(&dir));
+    // vcvarsall can take most of a minute on a cold machine.
+    let r = common::run_within(
+        &["-c", "msvc-env --refresh && cl /nologo hello.c /Fe:hello.exe >/dev/null && ./hello.exe"],
+        Some(&dir),
+        std::time::Duration::from_secs(90),
+    );
     assert_eq!(r.stdout.trim(), "hello from msvc", "{}", r.stderr);
     assert!(r.stderr.contains("msvc-env:") && r.stderr.contains("MSVC 14."), "{}", r.stderr);
 

@@ -22,9 +22,15 @@ pub(crate) fn spawn(command: LaunchRequest) -> std::io::Result<ChildProcess> {
     let process_group = command.process_group;
     // See `CreateOptions::kill_external_commands_on_drop` (false for ordinary shells).
     let kill_on_drop = command.kill_on_drop;
+    #[cfg(windows)]
+    let background_job = command.background_job.clone();
 
     let mut command = tokio::process::Command::from(compose_std_command(command)?);
     command.kill_on_drop(kill_on_drop);
+    // sill: on Windows, every program joins a Job Object before it runs (`sys::job`).
+    #[cfg(windows)]
+    let (child, foreground_job) = crate::sys::job::start(&mut command, background_job.as_ref())?;
+    #[cfg(not(windows))]
     let child = command.spawn()?;
 
     #[expect(clippy::cast_possible_wrap)]
@@ -39,9 +45,14 @@ pub(crate) fn spawn(command: LaunchRequest) -> std::io::Result<ChildProcess> {
         ProcessGroup::New { .. } | ProcessGroup::NewSession => pid,
     };
 
-    let exited = child
-        .wait_with_output()
-        .map(|output| output.map(ExecutionResult::from));
+    let exited = child.wait_with_output().map(move |output| {
+        // sill: the program exited; what it left running stays (`sys::job`).
+        #[cfg(windows)]
+        if let Some(job) = foreground_job {
+            job.release();
+        }
+        output.map(ExecutionResult::from)
+    });
     Ok(ChildProcess::from_future(exited).native_child(pid, pgid))
 }
 
@@ -77,10 +88,13 @@ fn compose_std_command(command: LaunchRequest) -> std::io::Result<std::process::
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
+        // sill: and it starts suspended, to join its job first (`sys::job::start`).
+        let mut flags = crate::sys::job::SPAWN_FLAGS;
         // SAFETY: plain Win32 call; 0 means the process has no console.
         if unsafe { windows_sys::Win32::System::Console::GetConsoleCP() } == 0 {
-            cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+            flags |= windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         }
+        cmd.creation_flags(flags);
     }
     cmd.env_clear();
     cmd.envs(command.env);

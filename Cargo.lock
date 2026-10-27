@@ -3252,6 +3252,7 @@ dependencies = [
 name = "sill"
 version = "0.4.0"
 dependencies = [
+ "brush-core",
  "brush-shell",
  "rmcp",
  "schemars",

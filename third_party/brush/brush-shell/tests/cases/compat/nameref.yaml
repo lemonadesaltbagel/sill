@@ -295,6 +295,7 @@ cases:
       echo "arr[0]: ${arr[0]}"
 
   - name: "Nameref to array element - length"
+    min_oracle_version: "5.3" # bash 5.2 differs here
     stdin: |
       arr=("short" "a longer string here" "x")
       declare -n ref='arr[1]'
@@ -1892,6 +1893,7 @@ cases:
       echo "done"
 
   - name: "Env var lookup through subscripted nameref"
+    min_oracle_version: "5.3" # bash 5.2 differs here
     stdin: |
       arr=(zero one two three)
       declare -n ref='arr[2]'
@@ -1936,6 +1938,7 @@ cases:
       echo "expr: $(( ref * 2 ))"
 
   - name: "String length through subscripted nameref"
+    min_oracle_version: "5.3" # bash 5.2 differs here
     stdin: |
       arr=("short" "a longer string here" "x")
       declare -n ref='arr[1]'
@@ -1997,6 +2000,7 @@ cases:
       echo "ref: $ref"
 
   - name: "Subscripted nameref with set -u when element is unset"
+    min_oracle_version: "5.3" # bash 5.2 differs here
     ignore_stderr: true
     stdin: |
       set -u

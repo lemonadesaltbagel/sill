@@ -30,6 +30,8 @@ pub mod tokio_process;
 pub(crate) mod tokio_tasks;
 
 pub mod fs;
+/// sill: process lifetimes through Job Objects on Windows.
+pub mod job;
 /// sill: package.json scripts run in sill unless a script shell is configured.
 pub(crate) mod script_shell;
 /// sill: `#!` scripts on Windows.

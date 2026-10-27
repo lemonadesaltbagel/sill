@@ -11,10 +11,16 @@ struct Client {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next: u64,
+    /// The root the client offers (`roots/list`), if any.
+    root: Option<std::path::PathBuf>,
 }
 
 impl Client {
     fn start(cwd: &std::path::Path) -> Self {
+        Self::start_with_root(cwd, None)
+    }
+
+    fn start_with_root(cwd: &std::path::Path, root: Option<&std::path::Path>) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_bash"))
             .arg("--mcp")
             .current_dir(cwd)
@@ -25,10 +31,11 @@ impl Client {
             .expect("start bash --mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut c = Self { child, stdin, stdout, next: 0 };
+        let mut c = Self { child, stdin, stdout, next: 0, root: root.map(std::path::Path::to_path_buf) };
+        let caps = if root.is_some() { json!({"roots": {}}) } else { json!({}) };
         let info = c.request(
             "initialize",
-            json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}),
+            json!({"protocolVersion": "2025-06-18", "capabilities": caps, "clientInfo": {"name": "test", "version": "1"}}),
         );
         assert_eq!(info["serverInfo"]["name"], "sill");
         c.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}));
@@ -48,6 +55,16 @@ impl Client {
             let mut line = String::new();
             assert!(self.stdout.read_line(&mut line).unwrap() > 0, "server closed");
             let msg: Value = serde_json::from_str(&line).unwrap();
+            // The server asking for the client's roots.
+            if msg["method"] == "roots/list" {
+                let uri = self.root.as_ref().map(|r| {
+                    let p = r.to_string_lossy().replace('\\', "/");
+                    if p.starts_with('/') { format!("file://{p}") } else { format!("file:///{p}") }
+                });
+                let roots: Vec<Value> = uri.into_iter().map(|u| json!({"uri": u})).collect();
+                self.send(&json!({"jsonrpc": "2.0", "id": msg["id"], "result": {"roots": roots}}));
+                continue;
+            }
             if msg["id"] == id {
                 assert!(msg.get("error").is_none(), "{msg}");
                 return msg["result"].clone();
@@ -162,4 +179,26 @@ fn background_jobs() {
     assert!(r.contains("(stopped)"), "{r}");
     let (r, err) = c.call("bash_output", json!({"id": id}));
     assert!(err && r.contains("no background job"), "{r}");
+}
+
+#[cfg(windows)]
+#[test]
+fn programs_a_command_leaves_running_become_a_job() {
+    let mut c = Client::start(&workdir("adopt"));
+    // cmd starts ping and exits: the command is done, ping isn't.
+    let r = c.bash("cmd //c 'start /b ping -n 30 127.0.0.1 >nul'; echo started");
+    assert!(r.starts_with("started\n"), "{r}");
+    let marker = "still running: background job ";
+    let at = r.find(marker).unwrap_or_else(|| panic!("{r}")) + marker.len();
+    let id: u64 = r[at..].split(' ').next().unwrap().parse().unwrap();
+    let (r, _) = c.call("bash_kill", json!({"id": id}));
+    assert!(r.contains("(stopped)"), "{r}");
+}
+
+#[test]
+fn starts_in_the_root_the_client_offers() {
+    let root = workdir("root-project");
+    let mut c = Client::start_with_root(&workdir("root-elsewhere"), Some(&root));
+    let r = c.bash("basename \"$PWD\"");
+    assert!(r.starts_with(&format!("{}\n", root.file_name().unwrap().to_string_lossy())), "{r}");
 }

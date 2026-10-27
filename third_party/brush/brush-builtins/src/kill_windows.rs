@@ -5,11 +5,14 @@
 //! signal ends the target: the process and everything it started (there are no process
 //! groups to do that, and stopping only a `cmd.exe` or `npm.cmd` wrapper would leave the real
 //! server running). Each gets exit code 128 + the signal number, which is what bash reports
-//! for a process ended by that signal. `kill -0` checks that a process exists.
+//! for a process ended by that signal. `kill -0` checks that a process exists. Signals whose
+//! default is to stop, continue or be ignored (`STOP`, `CONT`, `WINCH`) can't be sent: ending
+//! the process would be wrong.
 
 use clap::Parser;
 use std::io::Write;
 
+use brush_core::traps::TrapSignal;
 use brush_core::{ExecutionExitCode, ExecutionResult, builtins};
 
 /// Signal a job or process.
@@ -34,16 +37,69 @@ pub(crate) struct KillCommand {
 
 brush_clap_adapter::impl_parse_args!(KillCommand);
 
-/// The signals `kill` accepts on Windows (all end the process) and their numbers.
-const SIGNALS: &[(&str, i32)] = &[("HUP", 1), ("INT", 2), ("QUIT", 3), ("KILL", 9), ("TERM", 15)];
-
+/// A signal's number (0 for `-0`), by its name or number: `TERM`, `SIGTERM`, `15`.
 fn parse_signal(spec: &str) -> Option<i32> {
-    if let Ok(n) = spec.parse::<i32>() {
-        return (n == 0 || SIGNALS.iter().any(|(_, num)| *num == n)).then_some(n);
+    match spec.parse::<TrapSignal>() {
+        Ok(TrapSignal::Signal(s)) => Some(s as i32),
+        Ok(TrapSignal::Exit) if spec.parse::<i32>() == Ok(0) => Some(0),
+        _ => None,
     }
-    let name = spec.to_ascii_uppercase();
-    let name = name.strip_prefix("SIG").unwrap_or(&name);
-    SIGNALS.iter().find(|(n, _)| *n == name).map(|(_, num)| *num)
+}
+
+/// Signals whose default is to stop, continue or be ignored: nothing to end.
+const NOT_ENDING: &[&str] = &[
+    "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG", "SIGWINCH",
+];
+
+fn ends_process(signal: i32) -> bool {
+    match TrapSignal::try_from(signal) {
+        Ok(TrapSignal::Signal(s)) => !NOT_ENDING.contains(&s.as_str()),
+        _ => signal == 0,
+    }
+}
+
+/// `kill -l`: the signal table; with arguments, each number's name (an exit status above
+/// 128 names the signal that ended a process: `kill -l 143` is `TERM`) or each name's number.
+fn list_signals(
+    context: &brush_core::ExecutionContext<'_, impl brush_core::ShellExtensions>,
+    args: &[String],
+) -> Result<ExecutionResult, brush_core::Error> {
+    if args.is_empty() {
+        brush_core::traps::format_signals(
+            context.stdout(),
+            TrapSignal::iterator().filter(|s| !matches!(s, TrapSignal::Exit)),
+        )?;
+        writeln!(context.stdout())?;
+        return Ok(ExecutionResult::success());
+    }
+    let mut result = ExecutionResult::success();
+    for arg in args {
+        let line = if let Ok(n) = arg.parse::<i32>() {
+            let n = if n > 128 { n - 128 } else { n };
+            match TrapSignal::try_from(n) {
+                Ok(TrapSignal::Signal(s)) => Some(s.as_str().trim_start_matches("SIG").to_owned()),
+                Ok(TrapSignal::Exit) => Some("EXIT".to_owned()),
+                _ => None,
+            }
+        } else {
+            match TrapSignal::try_from(arg.as_str()) {
+                Ok(TrapSignal::Signal(s)) => Some((s as i32).to_string()),
+                Ok(TrapSignal::Exit) => Some("0".to_owned()),
+                _ => None,
+            }
+        };
+        if let Some(line) = line {
+            writeln!(context.stdout(), "{line}")?;
+        } else {
+            let name = &context.command_name;
+            writeln!(
+                context.stderr(),
+                "{name}: {arg}: invalid signal specification"
+            )?;
+            result = ExecutionResult::general_error();
+        }
+    }
+    Ok(result)
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for KillCommand {
@@ -56,13 +112,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for KillCommand {
         let name = context.command_name.clone();
 
         if self.list_signals {
-            let line = SIGNALS
-                .iter()
-                .map(|(n, num)| format!("{num:2}) SIG{n}"))
-                .collect::<Vec<_>>()
-                .join("\t");
-            writeln!(context.stdout(), "{line}")?;
-            return Ok(ExecutionResult::success());
+            return list_signals(&context, &self.args);
         }
 
         // bash's default signal is TERM.
@@ -70,14 +120,20 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for KillCommand {
         let mut targets: &[String] = &self.args;
         if let Some(spec) = &self.signal_name {
             let Some(n) = parse_signal(spec) else {
-                writeln!(context.stderr(), "{name}: {spec}: invalid signal specification")?;
-                return Ok(ExecutionExitCode::InvalidUsage.into());
+                writeln!(
+                    context.stderr(),
+                    "{name}: {spec}: invalid signal specification"
+                )?;
+                return Ok(ExecutionResult::general_error());
             };
             signal = n;
         } else if let Some(n) = self.signal_number {
             if parse_signal(&n.to_string()).is_none() {
-                writeln!(context.stderr(), "{name}: {n}: invalid signal specification")?;
-                return Ok(ExecutionExitCode::InvalidUsage.into());
+                writeln!(
+                    context.stderr(),
+                    "{name}: {n}: invalid signal specification"
+                )?;
+                return Ok(ExecutionResult::general_error());
             }
             signal = n;
         } else if let Some(first) = targets.first()
@@ -85,11 +141,24 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for KillCommand {
             && !spec.is_empty()
         {
             let Some(n) = parse_signal(spec) else {
-                writeln!(context.stderr(), "{name}: {spec}: invalid signal specification")?;
-                return Ok(ExecutionExitCode::InvalidUsage.into());
+                writeln!(
+                    context.stderr(),
+                    "{name}: {spec}: invalid signal specification"
+                )?;
+                return Ok(ExecutionResult::general_error());
             };
             signal = n;
             targets = &targets[1..];
+        }
+
+        if !ends_process(signal) {
+            let sig =
+                TrapSignal::try_from(signal).map_or_else(|_| signal.to_string(), |s| s.to_string());
+            writeln!(
+                context.stderr(),
+                "{name}: {sig}: can't be sent on Windows (only signals that end a process can)"
+            )?;
+            return Ok(ExecutionResult::general_error());
         }
 
         if targets.is_empty() {
@@ -145,8 +214,7 @@ pub(crate) mod win {
     use std::collections::HashMap;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-        STILL_ACTIVE,
+        CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
     };
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
@@ -204,7 +272,9 @@ pub(crate) mod win {
         let mut more = unsafe { Process32FirstW(snap, &mut entry) } != 0;
         while more {
             if entry.th32ProcessID != entry.th32ParentProcessID {
-                map.entry(entry.th32ParentProcessID).or_default().push(entry.th32ProcessID);
+                map.entry(entry.th32ParentProcessID)
+                    .or_default()
+                    .push(entry.th32ProcessID);
             }
             // SAFETY: as above.
             more = unsafe { Process32NextW(snap, &mut entry) } != 0;
@@ -217,6 +287,16 @@ pub(crate) mod win {
     /// Ends `pid` and every process it started (deepest first, so none is orphaned and
     /// restarted by a parent in between), each with `exit_code`.
     pub(crate) fn terminate_tree(pid: i32, exit_code: u32) -> Result<(), &'static str> {
+        // A background job's `$!`: its Job Object holds every process it started, even
+        // ones whose parent has exited (`cmd /c start /b server &`), which a walk through
+        // parent PIDs can't find.
+        if let Some(job) = brush_core::sys::job::background_job_of(pid) {
+            return if job.terminate(exit_code) {
+                Ok(())
+            } else {
+                Err("no such process")
+            };
+        }
         let root = to_u32(pid)?;
         // Open the root first: a missing or protected target is the error to report.
         let root_handle = open(root, PROCESS_TERMINATE)?;

@@ -12,6 +12,12 @@
 //!
 //! Output goes to files, not pipes: a program the command leaves running in the background
 //! (`server &`) would otherwise hold the pipe open and the call would never end.
+//!
+//! Every command runs in a Job Object it joins before it starts, so a timeout, `bash_kill`
+//! or the server's exit ends everything it started, whatever happened to the processes in
+//! between. Programs a foreground command leaves running are adopted as a background job:
+//! the result says so, `bash_output` reads them, `bash_kill` stops them, and they end with
+//! the session rather than piling up unrecorded.
 
 use std::collections::HashMap;
 use std::io::{Read as _, Seek as _, SeekFrom};
@@ -104,10 +110,14 @@ pub struct KillArgs {
 struct Session {
     cwd: PathBuf,
     env: Vec<(String, String)>,
+    /// Whether the starting directory is settled (see `Server::settle_cwd`).
+    cwd_settled: bool,
 }
 
 struct Job {
-    child: tokio::process::Child,
+    /// The `bash.exe` the job started with; `None` for programs adopted from a finished
+    /// foreground command.
+    child: Option<tokio::process::Child>,
     tree: tree::Tree,
     command: String,
     started: Instant,
@@ -179,17 +189,16 @@ impl Server {
         let shell = std::env::current_exe()?;
         let dir = std::env::temp_dir().join("sill-mcp").join(std::process::id().to_string());
         std::fs::create_dir_all(&dir)?;
-        let cwd = std::env::var_os("SILL_MCP_ROOT")
-            .map(PathBuf::from)
-            .filter(|d| d.is_dir())
-            .map_or_else(std::env::current_dir, Ok)?;
+        let root = std::env::var_os("SILL_MCP_ROOT").map(PathBuf::from).filter(|d| d.is_dir());
+        let cwd_settled = root.is_some();
+        let cwd = root.map_or_else(std::env::current_dir, Ok)?;
         let env = std::env::vars_os()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
             .collect();
         Ok(Self {
             shell,
             dir,
-            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env })),
+            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, cwd_settled })),
             jobs: Arc::default(),
             next: Arc::new(AtomicU32::new(1)),
             tool_router: Self::tool_router(),
@@ -206,6 +215,7 @@ impl Server {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let args = params.0;
+        self.settle_cwd(&ctx).await;
         if args.run_in_background {
             return self.start_job(&args.command).await.map_err(io_error);
         }
@@ -218,7 +228,7 @@ impl Server {
 
         let started = Instant::now();
         let (mut child, tree) =
-            self.spawn(&session, &files.wrapper, &files.out, &files.err, false).map_err(io_error)?;
+            self.spawn(&session, &files.wrapper, &files.out, &files.err).map_err(io_error)?;
         let timeout = Duration::from_millis(args.timeout_ms.clamp(1, MAX_TIMEOUT_MS));
         let ended = tokio::select! {
             status = child.wait() => Ended::Exited(status.map_err(io_error)?.code()),
@@ -262,8 +272,32 @@ impl Server {
             ),
             Ended::Cancelled => "cancelled; the command was stopped".into(),
         };
-        let text = report(&out, &err, &footer);
-        files.remove(out_cut, err_cut);
+        let mut text = report(&out, &err, &footer);
+        // Programs the command left running become a background job of the session.
+        let left = if matches!(ended, Ended::Exited(_)) { tree.remaining() } else { 0 };
+        if left > 0 {
+            let id = self.next.fetch_add(1, Ordering::Relaxed);
+            let read = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
+            let job = Job {
+                child: None,
+                tree,
+                command: args.command.clone(),
+                started,
+                out: files.out.clone(),
+                err: files.err.clone(),
+                out_pos: read(&files.out),
+                err_pos: read(&files.err),
+            };
+            self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, job);
+            text.push_str(&format!(
+                "\n{left} program(s) it started are still running: background job {id} \
+                 (bash_output to read them, bash_kill to stop them; they end with this \
+                 session). Use run_in_background for servers."
+            ));
+            files.remove(true, true);
+        } else {
+            files.remove(out_cut, err_cut);
+        }
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
@@ -280,7 +314,7 @@ impl Server {
                 let Some(job) = jobs.get_mut(&args.id) else {
                     return Ok(unknown_job(args.id, &jobs));
                 };
-                let running = matches!(job.child.try_wait(), Ok(None));
+                let running = job.running();
                 let fresh = job.has_new_output();
                 if !running || fresh || Instant::now() >= deadline {
                     Some(job.read_new())
@@ -309,9 +343,11 @@ impl Server {
             }
         };
         let mut job = job;
-        let was_running = matches!(job.child.try_wait(), Ok(None));
+        let was_running = job.running();
         job.tree.kill();
-        let _ = job.child.wait().await;
+        if let Some(child) = job.child.as_mut() {
+            let _ = child.wait().await;
+        }
         let mut text = job.read_new();
         text.push_str(if was_running { "\n(stopped)" } else { "\n(it had already ended)" });
         let _ = std::fs::remove_file(&job.out);
@@ -321,15 +357,48 @@ impl Server {
 }
 
 impl Server {
+    /// Settles where the first command runs, once: `SILL_MCP_ROOT` if set; else the
+    /// client's first root (`roots/list`), when it offers them; else the directory the
+    /// client started the server in, unless that's no project's (a client's own install
+    /// folder, a system folder), when the home folder is a better start. A chat client like
+    /// Claude Desktop starts servers in its own folder.
+    #[allow(deprecated, reason = "roots are what clients offer today")]
+    async fn settle_cwd(&self, ctx: &RequestContext<RoleServer>) {
+        let mut session = self.session.lock().await;
+        if session.cwd_settled {
+            return;
+        }
+        session.cwd_settled = true;
+        let offers_roots = ctx
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.roots.is_some());
+        if offers_roots {
+            let roots = tokio::time::timeout(Duration::from_secs(3), ctx.peer.list_roots()).await;
+            if let Ok(Ok(result)) = roots
+                && let Some(dir) = result.roots.iter().find_map(|r| file_uri_path(&r.uri))
+                && dir.is_dir()
+            {
+                session.cwd = dir;
+                return;
+            }
+        }
+        if is_no_projects_dir(&session.cwd)
+            && let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+        {
+            session.cwd = PathBuf::from(home);
+        }
+    }
+
     async fn start_job(&self, command: &str) -> std::io::Result<CallToolResult> {
         let session = self.session.lock().await;
         let n = self.next.fetch_add(1, Ordering::Relaxed);
         let files = Files::new(&self.dir, n);
         std::fs::write(&files.cmd, command)?;
-        let (child, tree) = self.spawn(&session, &files.cmd, &files.out, &files.err, true)?;
+        let (child, tree) = self.spawn(&session, &files.cmd, &files.out, &files.err)?;
         let pid = child.id().unwrap_or(0);
         let job = Job {
-            child,
+            child: Some(child),
             tree,
             command: command.to_owned(),
             started: Instant::now(),
@@ -354,7 +423,6 @@ impl Server {
         script: &Path,
         out: &Path,
         err: &Path,
-        background: bool,
     ) -> std::io::Result<(tokio::process::Child, tree::Tree)> {
         let mut cmd = tokio::process::Command::new(&self.shell);
         cmd.arg("--noprofile").arg("--norc").arg(script);
@@ -369,12 +437,7 @@ impl Server {
         cmd.stdout(std::fs::File::create(out)?);
         cmd.stderr(std::fs::File::create(err)?);
         cmd.kill_on_drop(false);
-        tree::prepare(&mut cmd);
-        let child = cmd.spawn()?;
-        // A background job ends with the server; a foreground command's leftovers
-        // (`server &`) keep running, as they would in a terminal.
-        let tree = tree::Tree::new(&child, background)?;
-        Ok((child, tree))
+        tree::spawn(&mut cmd)
     }
 }
 
@@ -455,6 +518,40 @@ fn single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// The local path of a `file://` URI (`file:///C:/My%20Project` is `C:/My Project`).
+fn file_uri_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // `file:///C:/x` on Windows; `file:///home/x` elsewhere; a host part is not ours.
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let path = if rest.len() > 2 && rest.as_bytes()[2] == b':' {
+        &rest[1..]
+    } else {
+        rest
+    };
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut it = path.bytes();
+    while let Some(b) = it.next() {
+        if b == b'%' {
+            let hex: String = [it.next()?, it.next()?].iter().map(|&c| c as char).collect();
+            bytes.push(u8::from_str_radix(&hex, 16).ok()?);
+        } else {
+            bytes.push(b);
+        }
+    }
+    Some(PathBuf::from(String::from_utf8(bytes).ok()?))
+}
+
+/// Whether `dir` is a client's or the system's own folder rather than a place for work.
+fn is_no_projects_dir(dir: &Path) -> bool {
+    let dir = display(dir).to_lowercase();
+    ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(|p| display(Path::new(&p)).to_lowercase())
+        .any(|p| !p.is_empty() && (dir == p || dir.starts_with(&format!("{p}/"))))
+        || dir == "/"
+}
+
 /// A path as the shell shows it: `/` separators.
 fn display(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
@@ -471,11 +568,71 @@ fn parse_env(bytes: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A stream's bytes as text, line by line: UTF-8, or, for a line that isn't valid UTF-8
+/// (and holds no NUL, so isn't binary), the system's ANSI code page if that reads it
+/// cleanly. Some programs write that code page into a pipe whatever the console's is:
+/// Java since JEP 400 (GBK on Chinese Windows), some MSVC tools.
+fn decode(bytes: &[u8]) -> String {
+    decode_with(bytes, system_ansi_code_page())
+}
+
+fn decode_with(bytes: &[u8], ansi: Option<u32>) -> String {
+    let mut text = String::with_capacity(bytes.len());
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        match std::str::from_utf8(line) {
+            Ok(s) => text.push_str(s),
+            Err(_) => match ansi.filter(|_| !line.contains(&0)).and_then(|cp| from_code_page(line, cp)) {
+                Some(s) => text.push_str(&s),
+                None => text.push_str(&String::from_utf8_lossy(line)),
+            },
+        }
+    }
+    text
+}
+
+/// The ANSI code page, unless it's UTF-8 already (or there's none).
+#[cfg(windows)]
+fn system_ansi_code_page() -> Option<u32> {
+    // SAFETY: plain Win32 call.
+    let acp = unsafe { windows_sys::Win32::Globalization::GetACP() };
+    (acp != 65001).then_some(acp)
+}
+
+#[cfg(not(windows))]
+const fn system_ansi_code_page() -> Option<u32> {
+    None
+}
+
+/// `bytes` decoded in code page `cp`, if every byte sequence is valid there.
+#[cfg(windows)]
+fn from_code_page(bytes: &[u8], cp: u32) -> Option<String> {
+    use windows_sys::Win32::Globalization::{MB_ERR_INVALID_CHARS, MultiByteToWideChar};
+    let len = i32::try_from(bytes.len()).ok()?;
+    // SAFETY: sizing call with valid input.
+    let n = unsafe {
+        MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, std::ptr::null_mut(), 0)
+    };
+    if n <= 0 {
+        return None;
+    }
+    let mut wide = vec![0u16; usize::try_from(n).ok()?];
+    // SAFETY: the buffer holds the `n` units the sizing call asked for.
+    let m = unsafe {
+        MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, wide.as_mut_ptr(), n)
+    };
+    (m == n).then(|| String::from_utf16_lossy(&wide))
+}
+
+#[cfg(not(windows))]
+const fn from_code_page(_bytes: &[u8], _cp: u32) -> Option<String> {
+    None
+}
+
 /// A stream's text for a result: UTF-8 (invalid bytes replaced), CRLF as LF, no ANSI
 /// escapes, and the middle cut out of a long one, with a pointer to the whole file.
 /// Returns whether it was cut.
 fn shape(bytes: &[u8], file: &Path) -> (String, bool) {
-    let text = strip_ansi(&String::from_utf8_lossy(bytes)).replace("\r\n", "\n");
+    let text = strip_ansi(&decode(bytes)).replace("\r\n", "\n");
     let count = text.chars().count();
     if count <= SHOWN_HEAD + SHOWN_TAIL {
         return (text, false);
@@ -556,6 +713,15 @@ fn unknown_job(id: u32, jobs: &HashMap<u32, Job>) -> CallToolResult {
 }
 
 impl Job {
+    /// Whether anything the job started still runs (its `bash.exe`, or what it left).
+    fn running(&mut self) -> bool {
+        let shell_running = self
+            .child
+            .as_mut()
+            .is_some_and(|c| matches!(c.try_wait(), Ok(None)));
+        shell_running || self.tree.remaining() > 0
+    }
+
     fn has_new_output(&self) -> bool {
         let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
         len(&self.out) > self.out_pos || len(&self.err) > self.err_pos
@@ -568,13 +734,16 @@ impl Job {
         let (out, _) = shape(&out, &self.out);
         let (err, _) = shape(&err, &self.err);
         let secs = self.started.elapsed().as_secs();
-        let state = match self.child.try_wait() {
-            Ok(None) => format!("running for {secs} s"),
-            Ok(Some(status)) => format!(
-                "ended, exit {}",
-                status.code().map_or_else(|| "?".into(), |c| c.to_string())
-            ),
-            Err(e) => format!("unknown ({e})"),
+        let state = if self.running() {
+            format!("running for {secs} s")
+        } else {
+            match self.child.as_mut().map(tokio::process::Child::try_wait) {
+                Some(Ok(Some(status))) => format!(
+                    "ended, exit {}",
+                    status.code().map_or_else(|| "?".into(), |c| c.to_string())
+                ),
+                _ => "ended".into(),
+            }
         };
         let command: String = self.command.chars().take(80).collect();
         report(&out, &err, &format!("job: {command} · {state}"))
@@ -596,63 +765,35 @@ fn io_error(e: std::io::Error) -> ErrorData {
     ErrorData::internal_error(format!("sill: {e}"), None)
 }
 
-/// A command's process tree: on Windows a Job Object, so that ending it ends every program
-/// the command started; elsewhere a process group.
+/// A command's process tree: on Windows a Job Object the command joins before it starts
+/// (brush_core::sys::job), so ending it ends every program the command started; elsewhere
+/// a process group.
 mod tree {
     #[cfg(windows)]
-    pub(super) struct Tree(isize);
+    pub(super) struct Tree(std::sync::Arc<brush_core::sys::job::Job>);
 
+    /// Starts `cmd` in a new tree whose programs all end when it's dropped (at the latest,
+    /// when the server exits).
     #[cfg(windows)]
-    pub(super) fn prepare(_cmd: &mut tokio::process::Command) {}
-
-    #[cfg(windows)]
-    impl Tree {
-        /// Puts `child` in a new Job Object; with `kill_on_close`, everything in it ends when
-        /// the handle closes (at the latest, when the server exits).
-        pub(super) fn new(child: &tokio::process::Child, kill_on_close: bool) -> std::io::Result<Self> {
-            use windows_sys::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject,
-            };
-            // SAFETY: no name, default security; checked below.
-            let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-            if job.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            let tree = Self(job as isize);
-            if kill_on_close {
-                // SAFETY: a zeroed limit structure is valid; only the flag is set.
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                // SAFETY: `job` is valid; `info` is the structure the class names.
-                unsafe {
-                    SetInformationJobObject(
-                        job,
-                        JobObjectExtendedLimitInformation,
-                        (&raw const info).cast(),
-                        u32::try_from(std::mem::size_of_val(&info)).unwrap_or(0),
-                    )
-                };
-            }
-            if let Some(handle) = child.raw_handle() {
-                // SAFETY: both handles are valid. (Fails only if the process already ended.)
-                unsafe { AssignProcessToJobObject(job, handle.cast()) };
-            }
-            Ok(tree)
-        }
-
-        pub(super) fn kill(&self) {
-            // SAFETY: a Job Object handle this owns.
-            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0 as _, 1) };
-        }
+    pub(super) fn spawn(
+        cmd: &mut tokio::process::Command,
+    ) -> std::io::Result<(tokio::process::Child, Tree)> {
+        use brush_core::sys::job;
+        cmd.creation_flags(job::SPAWN_FLAGS);
+        let tree = std::sync::Arc::new(job::Job::new(true)?);
+        let (child, _) = job::start(cmd, Some(&tree))?;
+        Ok((child, Tree(tree)))
     }
 
     #[cfg(windows)]
-    impl Drop for Tree {
-        fn drop(&mut self) {
-            // SAFETY: a handle this owns, closed once.
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0 as _) };
+    impl Tree {
+        pub(super) fn kill(&self) {
+            self.0.terminate(1);
+        }
+
+        /// How many of its programs still run.
+        pub(super) fn remaining(&self) -> u32 {
+            self.0.active_processes()
         }
     }
 
@@ -660,16 +801,17 @@ mod tree {
     pub(super) struct Tree(Option<u32>);
 
     #[cfg(not(windows))]
-    pub(super) fn prepare(cmd: &mut tokio::process::Command) {
+    pub(super) fn spawn(
+        cmd: &mut tokio::process::Command,
+    ) -> std::io::Result<(tokio::process::Child, Tree)> {
         cmd.process_group(0);
+        let child = cmd.spawn()?;
+        let tree = Tree(child.id());
+        Ok((child, tree))
     }
 
     #[cfg(not(windows))]
     impl Tree {
-        pub(super) fn new(child: &tokio::process::Child, _kill_on_close: bool) -> std::io::Result<Self> {
-            Ok(Self(child.id()))
-        }
-
         pub(super) fn kill(&self) {
             if let Some(pgid) = self.0 {
                 let _ = std::process::Command::new("kill")
@@ -677,6 +819,16 @@ mod tree {
                     .status();
             }
         }
+
+        /// Not tracked here.
+        pub(super) const fn remaining(&self) -> u32 {
+            0
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for Tree {
+        fn drop(&mut self) {}
     }
 }
 
@@ -702,6 +854,28 @@ mod tests {
         let (text, cut) = shape(long.as_bytes(), Path::new("C:\\t\\out"));
         assert!(cut);
         assert!(text.contains("5 characters left out; the whole output is in C:/t/out"), "{text}");
+    }
+
+    #[test]
+    fn decoding_falls_back_line_by_line() {
+        // Without an ANSI code page, invalid UTF-8 is replaced.
+        assert_eq!(decode_with(b"ok\n\xff\n", None), "ok\n\u{fffd}\n");
+        assert_eq!(decode_with("中文\n".as_bytes(), Some(936)), "中文\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gbk_lines_read_as_gbk() {
+        // 中文 in GBK, after a UTF-8 line, and a binary line left alone.
+        let bytes = b"\xe2\x9c\x93 utf8\n\xd6\xd0\xce\xc4\n\x00\xd6\n";
+        assert_eq!(decode_with(bytes, Some(936)), "\u{2713} utf8\n中文\n\0\u{fffd}\n");
+    }
+
+    #[test]
+    fn file_uris() {
+        assert_eq!(file_uri_path("file:///C:/My%20Project"), Some(PathBuf::from("C:/My Project")));
+        assert_eq!(file_uri_path("file:///home/me/x"), Some(PathBuf::from("/home/me/x")));
+        assert_eq!(file_uri_path("https://x"), None);
     }
 
     #[test]
