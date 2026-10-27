@@ -541,15 +541,30 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf8(bytes).ok()?))
 }
 
-/// Whether `dir` is a client's or the system's own folder rather than a place for work.
+/// Whether `dir` is a client's or the system's own folder rather than a place for work: the
+/// Windows or Program Files folders, or one in Local AppData (where Claude Desktop and other
+/// per-user apps install), except the temporary folder, which is there too.
 fn is_no_projects_dir(dir: &Path) -> bool {
-    let dir = display(dir).to_lowercase();
-    ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+    let var = |v: &str| std::env::var_os(v).map(|p| comparable(Path::new(&p)));
+    let under = |dir: &str, p: &str| !p.is_empty() && (dir == p || dir.starts_with(&format!("{p}/")));
+    let dir = comparable(dir);
+    let system = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
         .iter()
-        .filter_map(|v| std::env::var(v).ok())
-        .map(|p| display(Path::new(&p)).to_lowercase())
-        .any(|p| !p.is_empty() && (dir == p || dir.starts_with(&format!("{p}/"))))
-        || dir == "/"
+        .filter_map(|v| var(v))
+        .any(|p| under(&dir, &p));
+    let temp = ["TEMP", "TMP"].iter().filter_map(|v| var(v)).any(|p| under(&dir, &p));
+    // A root (`/`, or `c:` on Windows) is no project's either.
+    let root = dir == "/" || (dir.len() == 2 && dir.ends_with(':'));
+    (system && !temp) || root
+}
+
+/// A path to compare with another: its long form where it exists (`RUNNER~1` is
+/// `runneradmin`), `/` separators, lowercase.
+fn comparable(p: &Path) -> String {
+    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = display(&p);
+    let s = s.strip_prefix("//?/").unwrap_or(&s).trim_end_matches('/');
+    if s.is_empty() { "/".to_owned() } else { s.to_lowercase() }
 }
 
 /// A path as the shell shows it: `/` separators.
@@ -869,6 +884,19 @@ mod tests {
         // 中文 in GBK, after a UTF-8 line, and a binary line left alone.
         let bytes = b"\xe2\x9c\x93 utf8\n\xd6\xd0\xce\xc4\n\x00\xd6\n";
         assert_eq!(decode_with(bytes, Some(936)), "\u{2713} utf8\n中文\n\0\u{fffd}\n");
+    }
+
+    #[test]
+    fn the_temporary_folder_is_a_place_for_work() {
+        assert!(!is_no_projects_dir(&std::env::temp_dir()));
+        assert!(!is_no_projects_dir(&std::env::temp_dir().join("project")));
+        assert!(is_no_projects_dir(Path::new("/")));
+        #[cfg(windows)]
+        for v in ["SystemRoot", "LOCALAPPDATA"] {
+            let p = PathBuf::from(std::env::var_os(v).unwrap());
+            assert!(is_no_projects_dir(&p), "{v}");
+            assert!(is_no_projects_dir(&p.join("AnthropicClaude")), "{v}");
+        }
     }
 
     #[test]
