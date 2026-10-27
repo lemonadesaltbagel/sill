@@ -151,6 +151,10 @@ CASES = [
      "why": "A background job doesn't keep the harness's output pipe open (harnesses wait for it).",
      "script": "ping -n 20 127.0.0.1 >/dev/null 2>&1 & echo started",
      "check": lambda o, e, c, s: text(o).strip() == "started" and s < 5},
+    {"id": "proc-procsub-in-subst", "cat": "process",
+     "why": "A loop reading a process substitution inside `$(...)` finishes (`x=$(while read l; do ...; done < <(find ...); echo $n)`).",
+     "script": "x=$(n=0; while IFS= read -r l; do n=$((n+1)); done < <(printf 'a\\nb\\nc\\n'); echo $n); echo \"n=$x\"",
+     "timeout": 20, "expect": "n=3\n"},
     {"id": "proc-pipefail", "cat": "process", "why": "`set -o pipefail` reports a failing stage.",
      "script": "set -o pipefail; false | true; echo $?", "expect": "1\n"},
 

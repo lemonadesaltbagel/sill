@@ -2136,14 +2136,20 @@ fn setup_process_substitution(
 
     // Asynchronously spawn off the subshell; we intentionally don't block on its
     // completion.
+    //
+    // sill: on a thread of its own. Spawned as a task from a runtime worker (inside `$(...)`,
+    // a pipeline stage), it went to that worker's LIFO slot, which other workers can't take
+    // over; the worker then blocked in the consumer (`read` from `< <(...)`) and the
+    // producer never ran: `x=$(while read -r l; do ...; done < <(cmd); echo)` hung. (The
+    // returned handle isn't needed; dropping it leaves the task running.)
     let subshell_cmd = subshell_cmd.to_owned();
-    sys::tasks::spawn(async move {
+    drop(sys::tasks::spawn_blocking(async move {
         // Intentionally ignore the result of the subshell command.
         let _ = subshell_cmd
             .list
             .execute(&mut subshell, &child_params)
             .await;
-    });
+    }));
 
     // Starting at 63 (a.k.a. 64-1)--and decrementing--look for an
     // available fd.
