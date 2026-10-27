@@ -362,6 +362,7 @@ impl Server {
     /// client started the server in, unless that's no project's (a client's own install
     /// folder, a system folder), when the home folder is a better start. A chat client like
     /// Claude Desktop starts servers in its own folder.
+    #[allow(deprecated, reason = "roots are what clients offer today")]
     async fn settle_cwd(&self, ctx: &RequestContext<RoleServer>) {
         let mut session = self.session.lock().await;
         if session.cwd_settled {
@@ -373,7 +374,6 @@ impl Server {
             .peer_info()
             .is_some_and(|info| info.capabilities.roots.is_some());
         if offers_roots {
-            #[allow(deprecated, reason = "roots are what clients offer today")]
             let roots = tokio::time::timeout(Duration::from_secs(3), ctx.peer.list_roots()).await;
             if let Ok(Ok(result)) = roots
                 && let Some(dir) = result.roots.iter().find_map(|r| file_uri_path(&r.uri))
