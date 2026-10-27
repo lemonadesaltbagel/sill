@@ -107,8 +107,9 @@ impl RegexMatcher {
 
 impl Matcher for RegexMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        self.regex
-            .is_match(file_info.path().to_string_lossy().as_ref())
+        // sill: in the `/` form find prints (see `path::slash_form`).
+        let path = file_info.path().to_string_lossy();
+        self.regex.is_match(super::path::slash_form(&path).as_ref())
     }
 }
 

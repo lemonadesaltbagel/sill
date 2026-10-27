@@ -274,6 +274,10 @@ async fn run_async(
         }
     };
 
+    // sill: what the next command of an MCP session starts with, saved after everything
+    // the script did (its own EXIT trap included), so nothing in it can skip this.
+    crate::session_state::save_if_asked(&mut *shell.lock().await).await;
+
     Ok(exit_code)
 }
 

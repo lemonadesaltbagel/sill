@@ -7,8 +7,10 @@
 //! Each command runs in a fresh `bash.exe` (this program), so a runaway or crashing command
 //! can't take the server down, and a timeout ends its whole process tree (a Job Object on
 //! Windows). What a shell session would keep carries over between calls: after each command
-//! the working directory and the exported environment are recorded, and the next command
-//! starts from them. Functions, aliases and unexported variables don't carry over.
+//! the working directory, the exported environment, and functions, aliases and options are
+//! recorded (by the shell itself as it ends, so a command's own EXIT trap can't skip it:
+//! brush-shell `session_state`), and the next command starts from them. Unexported
+//! variables don't carry over, nor does `set -e`.
 //!
 //! Output goes to files, not pipes: a program the command leaves running in the background
 //! (`server &`) would otherwise hold the pipe open and the call would never end.
@@ -41,7 +43,9 @@ pub(crate) const ARG: &str = "--mcp";
 
 /// The hidden argument with which a command's wrapper records its exported environment
 /// (see `wrapper`): `bash.exe --sill-mcp-env FILE` writes its own environment there.
-pub(crate) const ENV_DUMP_ARG: &str = "--sill-mcp-env";
+/// Asks a command's shell to save the session's state under the base path it names
+/// (brush-shell `session_state`).
+pub(crate) const STATE_VAR: &str = "SILL_MCP_STATE";
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -56,14 +60,14 @@ sill's `bash` tool instead of PowerShell or cmd: Unix commands, scripts and Make
 there as on Linux (grep, sed, awk, find, make, rg, jq, git, npm, python), and `apply_patch` \
 edits files (patch on stdin or as an argument). `C:/x` and `/c/x` paths both work; there is \
 no sudo or apt; `msvc-env` loads Visual Studio's C/C++ tools. The working directory and \
-exported variables carry over between calls; functions and aliases don't. Start servers and \
+exported variables, functions, aliases and options carry over between calls. Start servers and \
 watchers with `run_in_background`, read them with `bash_output`, stop them with `bash_kill`.";
 
 const BASH_DESCRIPTION: &str = "\
 Run a command in Bash on this Windows machine (sill, native Bash: grep, sed, awk, find, make, \
 rg, jq, git, npm, python, apply_patch). Use it instead of PowerShell or cmd for shell work. \
-Returns stdout, stderr and the exit code. The working directory and exported variables carry \
-over to the next call. Stopped after `timeout_ms` (default 120000, at most 600000) with every \
+Returns stdout, stderr and the exit code. The working directory, exported variables, functions \
+and aliases carry over to the next call. Stopped after `timeout_ms` (default 120000, at most 600000) with every \
 program it started; for a server or anything long-running, set `run_in_background` to get a \
 job id at once.";
 
@@ -110,6 +114,8 @@ pub struct KillArgs {
 struct Session {
     cwd: PathBuf,
     env: Vec<(String, String)>,
+    /// The functions, aliases and options the last command left (shell code).
+    state: String,
     /// Whether the starting directory is settled (see `Server::settle_cwd`).
     cwd_settled: bool,
 }
@@ -171,17 +177,6 @@ pub(crate) fn serve() -> ! {
 
 /// `bash.exe --sill-mcp-env FILE`: writes this process's environment (the shell's exported
 /// variables, as the shell passed them) to FILE as NUL-separated `NAME=value` entries.
-pub(crate) fn dump_env(file: &std::ffi::OsStr) -> ! {
-    let mut out = Vec::new();
-    for (k, v) in std::env::vars_os() {
-        out.extend_from_slice(k.to_string_lossy().as_bytes());
-        out.push(b'=');
-        out.extend_from_slice(v.to_string_lossy().as_bytes());
-        out.push(0);
-    }
-    let code = i32::from(std::fs::write(file, out).is_err());
-    std::process::exit(code)
-}
 
 #[tool_router(router = tool_router)]
 impl Server {
@@ -198,7 +193,7 @@ impl Server {
         Ok(Self {
             shell,
             dir,
-            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, cwd_settled })),
+            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, state: String::new(), cwd_settled })),
             jobs: Arc::default(),
             next: Arc::new(AtomicU32::new(1)),
             tool_router: Self::tool_router(),
@@ -224,11 +219,13 @@ impl Server {
         let n = self.next.fetch_add(1, Ordering::Relaxed);
         let files = Files::new(&self.dir, n);
         std::fs::write(&files.cmd, &args.command).map_err(io_error)?;
+        std::fs::write(&files.restore, &session.state).map_err(io_error)?;
         std::fs::write(&files.wrapper, wrapper(&files)).map_err(io_error)?;
 
         let started = Instant::now();
-        let (mut child, tree) =
-            self.spawn(&session, &files.wrapper, &files.out, &files.err).map_err(io_error)?;
+        let (mut child, tree) = self
+            .spawn(&session, &files.wrapper, &files.out, &files.err, Some(&files.base))
+            .map_err(io_error)?;
         let timeout = Duration::from_millis(args.timeout_ms.clamp(1, MAX_TIMEOUT_MS));
         let ended = tokio::select! {
             status = child.wait() => Ended::Exited(status.map_err(io_error)?.code()),
@@ -253,6 +250,9 @@ impl Server {
             if !env.is_empty() {
                 session.env = env;
             }
+        }
+        if let Ok(state) = std::fs::read_to_string(&files.state) {
+            session.state = state;
         }
 
         let out = std::fs::read(&files.out).unwrap_or_default();
@@ -395,7 +395,9 @@ impl Server {
         let n = self.next.fetch_add(1, Ordering::Relaxed);
         let files = Files::new(&self.dir, n);
         std::fs::write(&files.cmd, command)?;
-        let (child, tree) = self.spawn(&session, &files.cmd, &files.out, &files.err)?;
+        std::fs::write(&files.restore, &session.state)?;
+        std::fs::write(&files.wrapper, wrapper(&files))?;
+        let (child, tree) = self.spawn(&session, &files.wrapper, &files.out, &files.err, None)?;
         let pid = child.id().unwrap_or(0);
         let job = Job {
             child: Some(child),
@@ -416,13 +418,15 @@ impl Server {
     }
 
     /// Starts `bash.exe SCRIPT` in the session's directory and environment, with stdout and
-    /// stderr to the given files and no stdin.
+    /// stderr to the given files and no stdin; with `state`, the shell saves the session's
+    /// state under that base path as it ends.
     fn spawn(
         &self,
         session: &Session,
         script: &Path,
         out: &Path,
         err: &Path,
+        state: Option<&Path>,
     ) -> std::io::Result<(tokio::process::Child, tree::Tree)> {
         let mut cmd = tokio::process::Command::new(&self.shell);
         cmd.arg("--noprofile").arg("--norc").arg(script);
@@ -439,6 +443,9 @@ impl Server {
         // even an empty one, is left alone.
         if cfg!(windows) && !session.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("JAVA_TOOL_OPTIONS")) {
             cmd.env("JAVA_TOOL_OPTIONS", JAVA_UTF8);
+        }
+        if let Some(base) = state {
+            cmd.env(STATE_VAR, base);
         }
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::fs::File::create(out)?);
@@ -465,24 +472,32 @@ enum Ended {
 
 /// A command's files in the server's temporary directory.
 struct Files {
+    /// What the shell saves the state under (`BASE.cwd`, `BASE.env`, `BASE.state.sh`).
+    base: PathBuf,
     cmd: PathBuf,
     wrapper: PathBuf,
+    /// The state the command starts with.
+    restore: PathBuf,
     out: PathBuf,
     err: PathBuf,
     cwd: PathBuf,
     env: PathBuf,
+    state: PathBuf,
 }
 
 impl Files {
     fn new(dir: &Path, n: u32) -> Self {
         let f = |ext: &str| dir.join(format!("{n}.{ext}"));
         Self {
+            base: dir.join(n.to_string()),
             cmd: f("cmd.sh"),
             wrapper: f("run.sh"),
+            restore: f("restore.sh"),
             out: f("out"),
             err: f("err"),
             cwd: f("cwd"),
             env: f("env"),
+            state: f("state.sh"),
         }
     }
 
@@ -491,8 +506,10 @@ impl Files {
         for (path, keep) in [
             (&self.cmd, false),
             (&self.wrapper, false),
+            (&self.restore, false),
             (&self.cwd, false),
             (&self.env, false),
+            (&self.state, false),
             (&self.out, keep_out),
             (&self.err, keep_err),
         ] {
@@ -507,17 +524,13 @@ impl Files {
 /// `export` act on this shell), and an EXIT trap that records where it ended up, however it
 /// ends (`exit`, `set -e`, the last command).
 fn wrapper(files: &Files) -> String {
-    let q = |p: &Path| single_quote(&display(p));
+    // The last command's functions, aliases and options, then the command. Aliases work as
+    // in an interactive shell; `errexit` isn't carried over (it would end later commands at
+    // their first failure). The shell itself saves the state as it ends.
     format!(
-        "__sill_mcp_cwd={cwd}\n__sill_mcp_env={env}\n__sill_mcp_exe={exe}\n\
-         trap '__sill_mcp_status=$?; pwd -P >| \"$__sill_mcp_cwd\" 2>/dev/null; \
-         \"$__sill_mcp_exe\" {dump} \"$__sill_mcp_env\" 2>/dev/null; exit $__sill_mcp_status' EXIT\n\
-         . {cmd}\n",
-        cwd = q(&files.cwd),
-        env = q(&files.env),
-        exe = q(&std::env::current_exe().unwrap_or_default()),
-        dump = ENV_DUMP_ARG,
-        cmd = q(&files.cmd),
+        ". {restore} 2>/dev/null\nset +o errexit\nshopt -s expand_aliases\n. {cmd}\n",
+        restore = single_quote(&display(&files.restore)),
+        cmd = single_quote(&display(&files.cmd)),
     )
 }
 

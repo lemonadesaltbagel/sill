@@ -282,7 +282,7 @@ pub fn compose_launch_request<S: AsRef<str>, SE: extensions::ShellExtensions>(
 /// * `shell` - The shell whose exported state should be used.
 /// * `program` - The program's path, to set `_` to, if it's to be set.
 /// * `args` - The program's arguments.
-fn compose_env<S: AsRef<str>>(
+pub(crate) fn compose_env<S: AsRef<str>>(
     shell: &Shell<impl extensions::ShellExtensions>,
     program: Option<&str>,
     args: &[S],
@@ -715,6 +715,39 @@ pub(crate) fn execute_external_command(
     let child_stdin_is_terminal = context
         .try_fd(openfiles::OpenFiles::STDIN_FD)
         .is_some_and(|f| f.is_terminal());
+
+    // sill: an editor or a pager waits for a person at a terminal, and an agent's commands
+    // have none (`vi notes.txt` waited until the harness's timeout). An editor without a
+    // terminal says so and fails; a pager writing to a pipe or file is `cat`.
+    #[cfg(windows)]
+    let pager_cat;
+    #[cfg(windows)]
+    let (executable_path, cmd_args) = {
+        use std::io::Write as _;
+        let stem = executable_path.file_stem().unwrap_or_default().to_string_lossy();
+        match sill_winargs::needs_a_person(&stem) {
+            Some(sill_winargs::NeedsPerson::Editor) if !child_stdin_is_terminal => {
+                let _ = writeln!(
+                    context.stderr(),
+                    "{}: no terminal here for an editor (these commands run for a program, \
+                     not a person); edit files with your file tools, sed or apply_patch",
+                    context.command_name
+                );
+                return Ok(ExecutionResult::general_error().into());
+            }
+            Some(sill_winargs::NeedsPerson::Pager)
+                if !context.try_fd(openfiles::OpenFiles::STDOUT_FD).is_some_and(|f| f.is_terminal())
+                    && let Some(tools) = std::env::var_os("SILL_TOOLS_DIR")
+                    && Path::new(&tools).join("cat.exe").is_file() =>
+            {
+                pager_cat = Path::new(&tools).join("cat.exe");
+                let files: Vec<&String> =
+                    cmd_args.into_iter().filter(|a| !a.starts_with(['-', '+'])).collect();
+                (pager_cat.as_path(), files)
+            }
+            _ => (executable_path, cmd_args),
+        }
+    };
 
     // Figure out if we should be setting up a new process group.
     let new_pg = matches!(

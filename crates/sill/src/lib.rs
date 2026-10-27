@@ -2,14 +2,23 @@
 
 /// Runs the shell with the process's command line. Never returns normally.
 pub fn run() {
+    if std::env::args_os().nth(1).is_some_and(|a| a == NO_EDITOR_ARG) {
+        eprintln!(
+            "sill: git asked for an editor, and no one is at a terminal to use one: give the \
+             message with -m (or --no-edit to keep the one it has)"
+        );
+        std::process::exit(0);
+    }
     #[cfg(windows)]
     if std::env::args_os().nth(1).is_some_and(|a| a == console::HELPER_ARG) {
         console::run_helper();
     }
-    if std::env::args_os().nth(1).is_some_and(|a| a == mcp::ENV_DUMP_ARG)
-        && let Some(file) = std::env::args_os().nth(2)
-    {
-        mcp::dump_env(&file);
+    // A command of sill's MCP server: save the session's state as the shell ends. The
+    // variable is the server's to this process only, so it isn't passed on.
+    if let Some(base) = std::env::var_os(mcp::STATE_VAR) {
+        // SAFETY: the process is single-threaded here (before the shell's runtime starts).
+        unsafe { std::env::remove_var(mcp::STATE_VAR) };
+        brush_shell::session_state::save_on_exit(base.into());
     }
     trace_invocation();
     if std::env::args_os().skip(1).eq(["--version"]) {
@@ -40,6 +49,10 @@ pub fn run() {
 
     brush_shell::entry::run();
 }
+
+/// The argument that makes sill the editor git gets when no one is at a terminal (see
+/// `env_defaults::no_editor_for_git`).
+const NO_EDITOR_ARG: &str = "--sill-no-editor";
 
 #[cfg_attr(not(windows), allow(dead_code, reason = "used on Windows; tested everywhere"))]
 mod script_hint;
@@ -401,6 +414,24 @@ mod env_defaults {
         unsafe { SetThreadUILanguage(0x0409) };
     }
 
+    /// git starts an editor when it wants a message (`git commit` without `-m`, `git merge`
+    /// with a conflict resolved), and an editor with no one at a terminal waits until the
+    /// harness's timeout. When sill has no terminal and nothing names an editor for git,
+    /// git's editor is sill's [`NO_EDITOR_ARG`] helper: it says why and leaves the message
+    /// as it is, so `git commit` stops with git's own "empty commit message" and
+    /// `git commit --amend` or `git rebase --continue` keep theirs.
+    fn no_editor_for_git() {
+        use std::io::IsTerminal as _;
+        if std::env::var_os("GIT_EDITOR").is_some() || std::io::stdin().is_terminal() {
+            return;
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            let exe = exe.to_string_lossy().replace('\\', "/").replace('\'', "'\\''");
+            // SAFETY: as in `apply`.
+            unsafe { std::env::set_var("GIT_EDITOR", format!("'{exe}' {}", super::NO_EDITOR_ARG)) };
+        }
+    }
+
     pub(crate) fn apply() {
         if std::env::var_os("SILL_NO_ENV_DEFAULTS").is_some_and(|v| !v.is_empty() && v != "0") {
             return;
@@ -412,6 +443,7 @@ mod env_defaults {
                 unsafe { std::env::set_var(name, value) };
             }
         }
+        no_editor_for_git();
         for name in REMOVE {
             // SAFETY: as above.
             unsafe { std::env::remove_var(name) };

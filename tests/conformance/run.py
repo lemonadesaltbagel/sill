@@ -35,7 +35,9 @@ DETACHED_PROCESS = 0x00000008
 CATEGORY_TITLES = {
     "argv": "Arguments to native programs", "paths": "Paths", "encoding": "Encoding",
     "crlf": "Line endings and bytes", "process": "Processes", "limits": "Size limits",
-    "scripts": "Running scripts", "tools": "Tools agents use", "errors": "Errors and identity",
+    "scripts": "Running scripts", "tools": "Tools agents use", "files": "Files",
+    "interactive": "Programs that prompt", "alike": "Look-alikes (sill's rules don't fire)",
+    "errors": "Errors and identity",
 }
 
 
@@ -48,6 +50,45 @@ def shell_env():
     for k in ("PYTHONUTF8", "PYTHONIOENCODING"):
         env.pop(k, None)
     return env
+
+
+def run_in_job(argv, timeout, **kw):
+    """Runs `argv` (no console, like a harness's shell) and returns (stdout, stderr, code).
+    On Windows inside a Job Object, so a timeout ends everything it started: killing only the
+    shell would leave a grandchild (an editor git started) holding the output pipes, and
+    reading them would wait forever. A run that ends in time leaves what it started running
+    (the cases that check for leftovers look for them). On a timeout, raises
+    subprocess.TimeoutExpired with what was read."""
+    if os.name != "nt":
+        p = subprocess.run(argv, capture_output=True, timeout=timeout, **kw)
+        return p.stdout, p.stderr, p.returncode
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    job = wintypes.HANDLE(k32.CreateJobObjectW(None, None))
+
+    def kill_on_close(on):
+        # JOBOBJECT_EXTENDED_LIMIT_INFORMATION (144 bytes on x64); LimitFlags at offset 16.
+        info = (ctypes.c_byte * 144)()
+        ctypes.c_uint32.from_buffer(info, 16).value = 0x2000 if on else 0
+        k32.SetInformationJobObject(job, 9, info, 144)
+
+    kill_on_close(True)
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         creationflags=DETACHED_PROCESS | 0x4, **kw)  # 0x4: CREATE_SUSPENDED
+    k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(p._handle)))
+    ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(int(p._handle)))
+    try:
+        out, err = p.communicate(timeout=timeout)
+        kill_on_close(False)
+        return out, err, p.returncode
+    except subprocess.TimeoutExpired:
+        k32.TerminateJobObject(job, 1)
+        out, err = p.communicate()
+        raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
+    finally:
+        k32.CloseHandle(job)
 
 
 def processes_with(fragment):
@@ -94,9 +135,7 @@ def run_case(case, shell, echoargs, timeout, mcp=False):
                     fe.seek(0)
                     out, err, code = fo.read(), fe.read(), p.returncode
             else:
-                p = subprocess.run(argv, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL,
-                                   capture_output=True, creationflags=DETACHED_PROCESS, timeout=timeout)
-                out, err, code = p.stdout, p.stderr, p.returncode
+                out, err, code = run_in_job(argv, timeout, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL)
         except _Done:
             pass
         except subprocess.TimeoutExpired as e:

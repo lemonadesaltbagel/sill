@@ -69,6 +69,12 @@ impl<SE: extensions::ShellExtensions> crate::Shell<SE> {
         }
     }
 
+    /// sill: the environment a program started now would get: the exported variables (and
+    /// functions), as they're passed on.
+    pub fn exported_environment(&self) -> Vec<(String, String)> {
+        crate::commands::compose_env(self, None, &[] as &[&str])
+    }
+
     /// sill: what bash puts before a diagnostic: the script's name as it was given (or the
     /// shell's bare name, `bash`, for `-c` and stdin), and the line, unless interactive:
     /// `build.sh: line 3: ` or `bash: line 1: `.

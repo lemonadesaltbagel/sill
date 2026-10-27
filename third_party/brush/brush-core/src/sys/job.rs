@@ -29,19 +29,14 @@ mod imp {
     use std::os::windows::io::RawHandle;
     use std::sync::{Arc, Mutex};
 
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
         QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
     };
-    use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
-    };
+    use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
     use crate::sys::process::ProcessId;
 
@@ -164,8 +159,11 @@ mod imp {
                 ForegroundJob(joined.then_some(job))
             }),
         };
-        let pid = child.id().unwrap_or(0);
-        if let Err(e) = resume(pid) {
+        let resumed = match child.raw_handle() {
+            Some(handle) => resume(handle),
+            None => Err(std::io::Error::other("the started process has no handle")),
+        };
+        if let Err(e) = resumed {
             let _ = child.start_kill();
             return Err(e);
         }
@@ -182,47 +180,27 @@ mod imp {
             let joined = job.assign(child.as_raw_handle());
             ForegroundJob(joined.then_some(job))
         });
-        if let Err(e) = resume(child.id()) {
+        if let Err(e) = resume(child.as_raw_handle()) {
             let _ = child.kill();
             return Err(e);
         }
         Ok((child, foreground))
     }
 
-    /// Resumes the (only) thread of a process created suspended.
-    fn resume(pid: u32) -> std::io::Result<()> {
-        // SAFETY: plain snapshot call; checked below.
-        let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-        if snap == INVALID_HANDLE_VALUE {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: a zeroed THREADENTRY32 with its size set is what Thread32First takes.
-        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-        entry.dwSize = u32::try_from(std::mem::size_of::<THREADENTRY32>()).unwrap_or(0);
-        let mut resumed = false;
-        // SAFETY: a valid snapshot handle and entry.
-        let mut more = unsafe { Thread32First(snap, &raw mut entry) } != 0;
-        while more {
-            if entry.th32OwnerProcessID == pid {
-                // SAFETY: plain call; the handle is closed below.
-                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                if !thread.is_null() {
-                    // SAFETY: a valid thread handle, closed once.
-                    unsafe {
-                        resumed |= ResumeThread(thread) != u32::MAX;
-                        CloseHandle(thread);
-                    }
-                }
-            }
-            // SAFETY: as above.
-            more = unsafe { Thread32Next(snap, &raw mut entry) } != 0;
-        }
-        // SAFETY: the snapshot handle, closed once.
-        unsafe { CloseHandle(snap) };
-        if resumed {
+    #[link(name = "ntdll", kind = "raw-dylib")]
+    unsafe extern "system" {
+        fn NtResumeProcess(process: HANDLE) -> i32;
+    }
+
+    /// Resumes a process created suspended, by its handle: one call, where finding its
+    /// thread would take a snapshot of every thread on the machine.
+    fn resume(process: RawHandle) -> std::io::Result<()> {
+        // SAFETY: a valid process handle (the child's own).
+        let status = unsafe { NtResumeProcess(process.cast()) };
+        if status >= 0 {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!("couldn't resume process {pid}")))
+            Err(std::io::Error::other(format!("couldn't resume the process (NTSTATUS {status:#x})")))
         }
     }
 

@@ -87,6 +87,11 @@ pub fn install_default_providers() {
 
     #[cfg(feature = "experimental-bundled-coreutils")]
     commands.extend(brush_coreutils_builtins::bundled_commands());
+    // sill: uutils' `more` pages even into a pipe, and runs as sill itself, where the check
+    // for pagers with no terminal (brush-core `execute_external_command`) can't see it.
+    // Windows' own `more` is what's left, and that check makes it `cat` into a pipe.
+    #[cfg(windows)]
+    commands.remove("more");
 
     install(commands);
 }

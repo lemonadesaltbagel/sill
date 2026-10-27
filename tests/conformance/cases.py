@@ -45,8 +45,8 @@ def utf8(b):
         return False
 
 
-def argv(id, words, want, why):
-    return {"id": id, "cat": "argv", "why": why, "script": '"{echoargs}" ' + words,
+def argv(id, words, want, why, cat="argv"):
+    return {"id": id, "cat": cat, "why": why, "script": '"{echoargs}" ' + words,
             "check": lambda o, e, c, s, want=want: _json(o) == want}
 
 
@@ -206,6 +206,89 @@ CASES = [
      "files": {"x.ini": b"a\r\n"}, "script": "file -b x.ini", "expect": "ASCII text, with CRLF line terminators\n"},
     {"id": "tool-cygpath", "cat": "tools", "why": "`cygpath -w`, a Git Bash habit.",
      "script": "cygpath -w /c/Windows", "expect": "C:\\Windows\n"},
+
+    # --- files: what Windows' file system does differently -------------------------------------------
+    {"id": "fs-long-path", "cat": "files",
+     "why": "Paths past 260 characters (deep `node_modules`, generated trees) can be made, read, found and removed.",
+     "script": "d=; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do d=\"${d}segment_with_a_longer_name_$i/\"; done; "
+               "mkdir -p \"$d\" && echo hi > \"${d}file.txt\" && cat \"${d}file.txt\" && "
+               "find . -name file.txt | wc -l && rm -rf segment_with_a_longer_name_01 && ls -A",
+     "check": lambda o, e, c, s: text(o).split() == ["hi", "1"] and c == 0},
+    {"id": "fs-rm-in-use", "cat": "files",
+     "why": "Removing a file another program holds open fails visibly (Windows can't delete it), and works once that program has ended.",
+     "script": "python -c \"import time; f = open('held.txt', 'w'); time.sleep(8)\" & sleep 2; "
+               "rm -f held.txt; echo \"rm=$?\"; [ -e held.txt ] && echo still-there; "
+               "kill $!; wait $! 2>/dev/null; sleep 1; rm -f held.txt; echo \"after=$?\"; [ -e held.txt ] || echo gone",
+     "needs": ["python"],
+     "check": lambda o, e, c, s: text(o).split() == ["rm=1", "still-there", "after=0", "gone"]},
+    {"id": "fs-rm-junction", "cat": "files",
+     "why": "`rm -rf` of a junction (as pnpm and some tools make) removes the link, not what it points to.",
+     "script": "mkdir -p real && echo keep > real/data.txt && MSYS_NO_PATHCONV=1 cmd.exe /d /c 'mklink /J link real' >/dev/null && "
+               "rm -rf link; [ -e link ] || echo link-gone; cat real/data.txt",
+     "expect": "link-gone\nkeep\n"},
+    {"id": "fs-rm-git-repo", "cat": "files",
+     "why": "`rm -rf` removes a git repository (git's object files are read-only on Windows).",
+     "script": "git init -q r && cd r && echo a > a && git add a && git -c user.email=t@e -c user.name=t commit -qm m && "
+               "cd .. && rm -rf r; [ -e r ] && echo still-there || echo removed",
+     "expect": "removed\n"},
+    {"id": "fs-rm-readonly", "cat": "files",
+     "why": "`rm -f` removes a read-only file, as on Linux.",
+     "script": "echo x > ro.txt && chmod a-w ro.txt && rm -f ro.txt; [ -e ro.txt ] && echo still-there || echo removed",
+     "expect": "removed\n"},
+    {"id": "fs-case-rename", "cat": "files",
+     "why": "`mv Readme.md README.md` changes the name's case (the file system ignores case, so it's the same file).",
+     "script": "echo x > Readme.md && mv Readme.md README.md; ls",
+     "expect": "README.md\n"},
+    {"id": "fs-symlink", "cat": "files",
+     "why": "`ln -s` gives a name that reads as its target, for a file and for a directory.",
+     "script": "echo t > target.txt && mkdir d && echo in > d/f.txt && ln -s target.txt link.txt && ln -s d dlink && "
+               "cat link.txt dlink/f.txt",
+     "expect": "t\nin\n"},
+
+    # --- interactive programs: nothing waits for a person who isn't there ----------------------------
+    {"id": "int-git-commit-no-message", "cat": "interactive",
+     "why": "`git commit` without `-m` returns at once (no editor waits for a person), with git's own message.",
+     "script": "git init -q r && cd r && echo a > a && git add a && git -c user.email=t@e -c user.name=t commit; echo \"rc=$?\"",
+     "timeout": 20, "check": lambda o, e, c, s: s < 15 and "rc=" in text(o)},
+    {"id": "int-editor", "cat": "interactive",
+     "why": "An editor started with no terminal (`vi notes.txt`) returns instead of waiting.",
+     "script": "vi notes.txt; echo \"rc=$?\"",
+     "timeout": 20, "check": lambda o, e, c, s: s < 15 and "rc=" in text(o)},
+    {"id": "int-pager", "cat": "interactive",
+     "why": "A pager with no terminal (`less file`, `more file`) prints the file and returns.",
+     "script": "printf 'a\\nb\\n' > f.txt; less f.txt; more f.txt; echo done",
+     "timeout": 20, "check": lambda o, e, c, s: s < 15 and text(o).split() == ["a", "b", "a", "b", "done"]},
+    {"id": "int-npm-init", "cat": "interactive",
+     "why": "A program that prompts (`npm init`) gets end of input and returns, rather than waiting for an answer.",
+     "script": "npm init; echo \"rc=$?\"", "needs": ["npm"],
+     "timeout": 30, "check": lambda o, e, c, s: s < 25 and "rc=" in text(o)},
+
+    # --- look-alikes: sill's rules don't fire on what only resembles their trigger ------------------
+    {"id": "alike-sed-c-script", "cat": "alike",
+     "why": "A sed script that starts like a drive path (`/c/d`) reaches sed as written, not as `C:/d`.",
+     "script": "printf 'abc\\nxyz\\n' | sed '/c/d'", "expect": "xyz\n"},
+    {"id": "alike-awk-c-pattern", "cat": "alike",
+     "why": "An awk pattern like `/c/` reaches awk as written.",
+     "script": "printf 'c1\\nd\\nc2\\n' | awk '/c/ {n++} END {print n}'", "expect": "2\n"},
+    {"id": "alike-grep-c-pattern", "cat": "alike",
+     "why": "A grep pattern like `/c/` reaches grep as written, not as `C:/`.",
+     "script": "printf 'x/c/y\\nabc\\n' | grep '/c/'", "expect": "x/c/y\n"},
+    {"id": "alike-find-path-pattern", "cat": "alike",
+     "why": "A `find -path` pattern stays a pattern.",
+     "files": {"c/d/f.txt": "x"}, "script": "find . -path '*/c/d/*' -name '*.txt'", "expect": "./c/d/f.txt\n"},
+    {"id": "alike-cmd-quoted-dev-null", "cat": "alike",
+     "why": "`/dev/null` inside quotes in text for cmd.exe is text, not a redirection.",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'echo \"a>/dev/null\"'", "expect": "\"a>/dev/null\"\n"},
+    {"id": "alike-cmd-dev-null-word", "cat": "alike",
+     "why": "`/dev/null` as a word (not after `>`) in text for cmd.exe stays as written.",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'echo /dev/null'", "expect": "/dev/null\n"},
+    argv("alike-unc-not-switch", "//server/share", ["//server/share"],
+         "A `//server/share` path isn't a `//c`-style switch.", cat="alike"),
+    {"id": "alike-npm-bash-script", "cat": "alike",
+     "why": "An npm script that is bash (`set -e && ...`) runs without a note that it looks written for cmd.exe.",
+     "files": {"package.json": '{"name": "a", "version": "1.0.0", "scripts": {"build": "set -e && echo ok"}}'},
+     "script": "npm run -s build", "needs": ["npm"],
+     "check": lambda o, e, c, s: text(o).strip() == "ok" and b"cmd.exe" not in e},
 
     # --- errors and identity -------------------------------------------------------------------------
     {"id": "err-not-found", "cat": "errors", "why": "A missing command: status 127 and bash's message shape.",

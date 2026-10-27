@@ -20,10 +20,21 @@ impl PathMatcher {
     }
 }
 
+/// sill: a path with Windows' `\` separators as `/`, as find prints it on Windows (and as
+/// `-path` and `-regex` patterns are written). Unchanged elsewhere.
+pub(crate) fn slash_form(path: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) && path.contains('\\') {
+        path.replace('\\', "/").into()
+    } else {
+        path.into()
+    }
+}
+
 impl Matcher for PathMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
+        // sill: matched in the `/` form find prints (`-path '*/src/*'`), not Windows' `\`.
         let path = file_info.path().to_string_lossy();
-        self.pattern.matches(&path)
+        self.pattern.matches(&slash_form(&path))
     }
 }
 
