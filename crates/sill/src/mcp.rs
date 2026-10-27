@@ -553,7 +553,9 @@ fn is_no_projects_dir(dir: &Path) -> bool {
         .filter_map(|v| var(v))
         .any(|p| under(&dir, &p));
     let temp = ["TEMP", "TMP"].iter().filter_map(|v| var(v)).any(|p| under(&dir, &p));
-    (system && !temp) || dir == "/"
+    // A root (`/`, or `c:` on Windows) is no project's either.
+    let root = dir == "/" || (dir.len() == 2 && dir.ends_with(':'));
+    (system && !temp) || root
 }
 
 /// A path to compare with another: its long form where it exists (`RUNNER~1` is
