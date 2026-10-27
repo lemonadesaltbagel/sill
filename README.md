@@ -26,7 +26,7 @@ All measured on Windows 11 with the Git Bash that ships with Git for Windows as 
 | GitHub's `windows-2025` runner (en-US) | **59/59** | 45/59 |
 | A Chinese-locale laptop (code page 936), 0.4.0 on the first 56 cases | **56/56** | 39/56 |
 
-**Real agents, end to end:** 18 tasks with automatic checks, run with DeepSeek's low-cost model. The tasks, their checks, the runner for each harness and the comparison script are public in [sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests) (`lab/agent-e2e`; its `agent-e2e` workflow reruns them with any model). The tasks include a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, and an MSVC build. Two runs per task on the Chinese-locale laptop:
+**Real agents, end to end:** 18 tasks with automatic checks, run with DeepSeek's low-cost model. The tasks, their checks, the runner for each harness and the comparison script are public in [sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests) (its `agent-e2e` workflow reruns them with any model). The tasks include a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, and an MSVC build. Two runs per task on the Chinese-locale laptop:
 
 | harness | sill | Git Bash | PowerShell |
 |---|---|---|---|
