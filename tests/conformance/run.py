@@ -83,9 +83,20 @@ def run_case(case, shell, echoargs, timeout, mcp=False):
                 argv = [shell, "_case.sh"]
             else:
                 argv = [shell, "-c", script]
-            p = subprocess.run(argv, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL,
-                               capture_output=True, creationflags=DETACHED_PROCESS, timeout=timeout)
-            out, err, code = p.stdout, p.stderr, p.returncode
+            if case.get("after_running"):
+                # A program `start` leaves running inherits every inheritable handle cmd.exe
+                # has, a pipe's included (as under Git Bash), and a pipe would wait for it.
+                with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+                    p = subprocess.run(argv, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL,
+                                       stdout=fo, stderr=fe, creationflags=DETACHED_PROCESS,
+                                       timeout=timeout)
+                    fo.seek(0)
+                    fe.seek(0)
+                    out, err, code = fo.read(), fe.read(), p.returncode
+            else:
+                p = subprocess.run(argv, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL,
+                                   capture_output=True, creationflags=DETACHED_PROCESS, timeout=timeout)
+                out, err, code = p.stdout, p.stderr, p.returncode
         except _Done:
             pass
         except subprocess.TimeoutExpired as e:
@@ -100,6 +111,9 @@ def run_case(case, shell, echoargs, timeout, mcp=False):
             except Exception:  # noqa: BLE001
                 ok = False
         if case.get("after_running"):
+            if secs > 10:
+                ok = False
+                err += b"\n[the shell waited for what the command left running]"
             time.sleep(1)
             alive = processes_with(case["after_running"])
             if not alive:
