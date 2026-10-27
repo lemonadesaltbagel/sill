@@ -34,6 +34,11 @@ pub fn sill(script: &str) -> Run {
 
 /// Runs `sill` with exactly `args` (as a harness would), optionally in `cwd`.
 pub fn run(args: &[&str], cwd: Option<&std::path::Path>) -> Run {
+    run_within(args, cwd, TIMEOUT)
+}
+
+/// As [`run`], for something slow by nature (Visual Studio's `vcvarsall`).
+pub fn run_within(args: &[&str], cwd: Option<&std::path::Path>, timeout: Duration) -> Run {
     let script = args.join(" ");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sill"));
     cmd.args(args);
@@ -63,9 +68,9 @@ pub fn run(args: &[&str], cwd: Option<&std::path::Path>) -> Run {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if start.elapsed() > TIMEOUT {
+        if start.elapsed() > timeout {
             let _ = child.kill();
-            panic!("sill timed out after {TIMEOUT:?} running: {}", &script[..script.len().min(200)]);
+            panic!("sill timed out after {timeout:?} running: {}", &script[..script.len().min(200)]);
         }
         std::thread::sleep(Duration::from_millis(10));
     };
