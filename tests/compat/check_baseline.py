@@ -28,7 +28,8 @@ def main():
         else:
             allowed.add(line)
 
-    failures = [u for u in results["unexpected"] if not u.endswith("(unexpected success)")]
+    # Names are compared trimmed, as the baseline's lines are.
+    failures = [u.strip() for u in results["unexpected"] if not u.endswith("(unexpected success)")]
     new = [f for f in failures if f not in allowed]
     new_hung = [h for h in results["hung"] if h not in hung_ok]
     fixed = sorted(allowed - set(failures))

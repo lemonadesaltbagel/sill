@@ -3,7 +3,6 @@
 # Mostly Git Bash's own differences (its /usr/bin paths, MSYS behavior) and what Windows
 # lacks (signals, coproc, descriptors above 2 for programs).
 succeeded >= 2428
-HUNG builtins/kill.yaml
 arguments.yaml: -c mode -- torture
 arguments.yaml: script -- torture
 builtins/alias.yaml: Alias body with tilde expansion
@@ -32,6 +31,16 @@ builtins/exec.yaml: exec -a
 builtins/hash.yaml: Display not-yet-hashed program
 builtins/jobs.yaml: fg resumes a stopped job without a terminal to give it
 builtins/jobs.yaml: fg resumes every process of a stopped job
+builtins/kill.yaml: A stopped job that survives SIGTERM runs on
+builtins/kill.yaml: kill -l
+builtins/kill.yaml: kill -n
+builtins/kill.yaml: kill -s
+builtins/kill.yaml: kill -sigspec
+builtins/kill.yaml: kill -sigspec (numeric)
+builtins/kill.yaml: kill continues a job sent SIGTERM that stopped again in the background
+builtins/kill.yaml: kill continues a stopped job sent SIGTERM, so it can act on it
+builtins/kill.yaml: kill sends SIGTERM by default
+builtins/kill.yaml: kill takes -N after a signal as a process group
 builtins/pushd_popd_dirs.yaml: Basic pushd usage
 builtins/pushd_popd_dirs.yaml: basic dirs usage
 builtins/pushd_popd_dirs.yaml: dirs to clear
