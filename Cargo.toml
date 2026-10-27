@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/sill", "crates/sill-errno", "crates/sill-winargs", "lab/argv-live"]
+members = ["crates/sill", "crates/sill-errno", "crates/sill-winargs"]
 # The vendored brush tree is its own workspace; crates/sill uses it by path.
-exclude = ["third_party", "research"]
+exclude = ["third_party"]
 
 [workspace.package]
 edition = "2024"

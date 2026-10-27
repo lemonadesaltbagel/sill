@@ -1,0 +1,153 @@
+# Failures of brush's compat suite on windows-2025 (Git Bash as the reference) accepted
+# today; see tests/compat/check_baseline.py. Regenerate from the build's compat.json.
+# Mostly Git Bash's own differences (its /usr/bin paths, MSYS behavior) and what Windows
+# lacks (signals, coproc, descriptors above 2 for programs).
+succeeded >= 2433
+arguments.yaml: -c mode -- torture
+arguments.yaml: script -- torture
+builtins/alias.yaml: Alias body with tilde expansion
+builtins/bind.yaml: bind -l
+builtins/bind.yaml: bind -q/-P/-p
+builtins/bind.yaml: bind -x/-X/-r/-u
+builtins/bind.yaml: bind keyseq
+builtins/bind.yaml: bind macro 1
+builtins/bind.yaml: bind macro 2
+builtins/cd.yaml: Basic cd usage
+builtins/cd.yaml: cd -
+builtins/command.yaml: command -V
+builtins/command.yaml: command -p -v/-V still honors the hash table
+builtins/command.yaml: command -p searches the default path
+builtins/command.yaml: command -v
+builtins/command.yaml: command -v -p
+builtins/command.yaml: command -v with full paths
+builtins/command.yaml: command with --help
+builtins/compgen.yaml: compgen -A command in a constrained PATH
+builtins/compgen.yaml: compgen -A command with executable symlink
+builtins/compgen.yaml: compgen lists builtins sorted by name
+builtins/compgen.yaml: compgen lists enabled and disabled builtins sorted by name
+builtins/echo.yaml: echo -e
+builtins/enable.yaml: List all builtins
+builtins/exec.yaml: exec -a
+builtins/hash.yaml: Display not-yet-hashed program
+builtins/jobs.yaml: fg resumes a stopped job without a terminal to give it
+builtins/jobs.yaml: fg resumes every process of a stopped job
+builtins/kill.yaml: A stopped job that survives SIGTERM runs on
+builtins/kill.yaml: kill -l
+builtins/kill.yaml: kill -n
+builtins/kill.yaml: kill -s
+builtins/kill.yaml: kill -sigspec
+builtins/kill.yaml: kill -sigspec (numeric)
+builtins/kill.yaml: kill continues a job sent SIGTERM that stopped again in the background
+builtins/kill.yaml: kill continues a stopped job sent SIGTERM, so it can act on it
+builtins/kill.yaml: kill sends SIGTERM by default
+builtins/pushd_popd_dirs.yaml: Basic pushd usage
+builtins/pushd_popd_dirs.yaml: basic dirs usage
+builtins/pushd_popd_dirs.yaml: dirs to clear
+builtins/pushd_popd_dirs.yaml: dirs with tilde replacement
+builtins/pushd_popd_dirs.yaml: popd without dir change
+builtins/pushd_popd_dirs.yaml: pushd without dir change
+builtins/pwd.yaml: Basic pwd usage
+builtins/read.yaml: read -n and -N count characters, not bytes
+builtins/return.yaml: Return outside function with stderr to /dev/full
+builtins/shopt.yaml: shopt -o defaults
+builtins/shopt.yaml: shopt defaults
+builtins/test.yaml: test: -h and -L operators (symbolic link)
+builtins/test.yaml: test: files refer to same device and inode
+builtins/type.yaml: Test type -P -a with hashed path
+builtins/type.yaml: Test type -a with hashed path
+builtins/type.yaml: Test type -p -a with hashed path
+builtins/type.yaml: Test type reports a non-executable file found in PATH
+builtins/type.yaml: Test type with -P option and an external command
+builtins/type.yaml: Test type with -a option and a command with multiple definitions
+builtins/type.yaml: Test type with -f option and a command
+builtins/type.yaml: Test type with -p option and an external command
+builtins/type.yaml: Test type with -t option and an external command
+builtins/type.yaml: Test type with a valid command
+builtins/type.yaml: Test type with hashed path
+builtins/ulimit.yaml: ulimit -l
+builtins/ulimit.yaml: ulimit -m
+builtins/ulimit.yaml: ulimit -m unlimited
+builtins/ulimit.yaml: ulimit -n
+builtins/wait.yaml: a job's program gets a signal sent to its $! once, and the job goes on
+compound_cmds/coproc.yaml: COPROC array read FD is functional
+compound_cmds/coproc.yaml: Coproc body with command substitution
+compound_cmds/coproc.yaml: Coproc body with pipeline
+compound_cmds/coproc.yaml: Coproc body with stderr redirection
+compound_cmds/coproc.yaml: Coproc body writing to a file
+compound_cmds/coproc.yaml: Coproc cannot modify parent variables
+compound_cmds/coproc.yaml: Coproc inherits aliases
+compound_cmds/coproc.yaml: Coproc inherits functions
+compound_cmds/coproc.yaml: Coproc inherits non-exported variables
+compound_cmds/coproc.yaml: Coproc inherits parent environment
+compound_cmds/coproc.yaml: Coproc inside a conditional
+compound_cmds/coproc.yaml: Coproc inside a function
+compound_cmds/coproc.yaml: Coproc inside a loop body
+compound_cmds/coproc.yaml: Coproc output filtered with case
+compound_cmds/coproc.yaml: Coproc producing empty output
+compound_cmds/coproc.yaml: Coproc producing multiple lines of output
+compound_cmds/coproc.yaml: Coproc running a for loop
+compound_cmds/coproc.yaml: Coproc running a while loop
+compound_cmds/coproc.yaml: Coproc statement returns 0
+compound_cmds/coproc.yaml: Coproc with arithmetic operations
+compound_cmds/coproc.yaml: Coproc with case statement
+compound_cmds/coproc.yaml: Coproc with conditionals
+compound_cmds/coproc.yaml: Coproc with multi-statement brace group
+compound_cmds/coproc.yaml: Coproc with multiline string output
+compound_cmds/coproc.yaml: Named coproc FDs are functional
+compound_cmds/coproc.yaml: Named coproc inside a function
+compound_cmds/coproc.yaml: Named coproc read
+compound_cmds/coproc.yaml: Named coproc with brace group
+compound_cmds/coproc.yaml: Named coproc with subshell
+compound_cmds/coproc.yaml: Read coproc output with cat
+compound_cmds/coproc.yaml: Read coproc output with read builtin
+compound_cmds/coproc.yaml: Read multiple lines from coproc
+compound_cmds/coproc.yaml: Read multiple lines with read builtin
+compound_cmds/coproc.yaml: Second unnamed coproc replaces first
+compound_cmds/coproc.yaml: Sequential named coprocs with different names
+compound_cmds/coproc.yaml: Transform coproc output to uppercase
+compound_cmds/coproc.yaml: Unnamed coproc with brace group
+compound_cmds/coproc.yaml: Unnamed coproc with subshell
+compound_cmds/coproc.yaml: Wait with no args waits for coproc
+extended_tests.yaml: File symbolic link tests
+extended_tests.yaml: Files refer to same device and inode tests
+extended_tests.yaml: Regex with leading 
+options/bash_xtracefd.yaml: redirect to file that fails writes
+path_search.yaml: a command found through an empty PATH entry is runnable
+path_search.yaml: command -V absolutizes a command found through an empty PATH entry
+path_search.yaml: empty PATH entry is passed to the command as the working directory
+patterns/filename_expansion.yaml: Pathname expansion: extglob disabled
+patterns/filename_expansion.yaml: Trailing literal keeps dangling symlinks but drops missing
+patterns/filename_expansion.yaml: Trailing literal with directory symlinks
+prompt.yaml: Backslash adjacent to unrecognized escape sequence
+prompt.yaml: Backslash before dollar escapes parameter expansion
+prompt.yaml: Backslash before escaped dollar
+prompt.yaml: Backslash before newline is line continuation
+prompt.yaml: Backslash before non-special char preserves backslash
+prompt.yaml: Backslash followed by working-dir prompt piece
+prompt.yaml: Backslash-CR survives prompt expansion (issue #1119)
+prompt.yaml: Bare \$ leaves no protective backslash (issue #1167)
+prompt.yaml: Double backslash before dollar yields backslash + expansion
+prompt.yaml: Many backslashes before non-special
+prompt.yaml: Trailing literal backslash survives
+prompt.yaml: Working dir based prompts
+redirection.yaml: Inheritance of fds from parent
+redirection.yaml: Process substitution: input + output
+simple_commands.yaml: Command found in PATH is not executable
+simple_commands.yaml: Command found in PATH is not executable: search order and hashing
+special_parameters.yaml: $_ - external command exports resolved path via env
+well_known_vars.yaml: BASHOPTS
+well_known_vars.yaml: SHELL
+well_known_vars.yaml: Static well-known variables
+well_known_vars.yaml: dollar-_
+word_expansion/command_substitution.yaml: Backtick substitution strips null bytes
+word_expansion/command_substitution.yaml: Command substitution strips multiple null bytes
+word_expansion/command_substitution.yaml: Command substitution strips null bytes
+word_expansion/command_substitution.yaml: Command substitution with only null bytes produces empty string
+word_expansion/command_substitution.yaml: Input redirection substitution strips null bytes
+word_expansion/command_substitution.yaml: Nested command substitution strips null bytes
+word_expansion/command_substitution.yaml: Variable assignment from command substitution strips null bytes
+word_expansion/quotes.yaml: ANSI-C quotes
+word_expansion/quotes.yaml: ANSI-C quotes with escape sequences
+word_expansion/quotes.yaml: Double quotes: escaping
+word_expansion/tilde.yaml: Tilde expansion in list
+word_expansion/tilde.yaml: Tilde expansion: basic
