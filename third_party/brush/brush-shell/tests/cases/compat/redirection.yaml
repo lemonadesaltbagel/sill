@@ -147,6 +147,14 @@ cases:
       ls -d . non-existent-dir &>/dev/null
       ls -d . non-existent-dir &>>/dev/null
 
+  - name: "Process substitution read inside a command substitution"
+    stdin: |
+      shopt -u -o posix
+      x=$(n=0; while read -r l; do n=$((n+1)); done < <(seq 300); echo "$n")
+      echo "count: $x"
+      y=$(while read -r l; do echo "got $l"; done < <(printf 'a\nb\n'); echo end)
+      echo "$y"
+
   - name: "Process substitution: input + output"
     stdin: |
       shopt -u -o posix

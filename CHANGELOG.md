@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixes (from a code review)
+- **A loop reading a process substitution inside `$(...)` hung** (`x=$(while read -r l; do ...; done < <(find ...); echo $n)`): the producer was queued behind the blocked reader on the same runtime thread. It runs on a thread of its own now. Found by running Terminal-Bench's reference solutions; likely also the compat suite's rare `redirection.yaml` hang.
 - **`sed '/c/d'`, `awk '/c/ {n++}'` and `grep '/c/'`** reached the tool as `C:/d`, `C:/ {n++}` and `C:/`: arguments to sill's bundled tools that look like `/c/...` paths were rewritten whenever `C:\` existed. Scripts and patterns (the first operand of grep, sed and awk, `-e` values, `find -name`/`-path` patterns) are no longer rewritten, and a path is rewritten only when it exists, or its parent does and isn't just the drive.
 - **`find -path` and `-regex` matched nothing with a `/` in the pattern** (`find . -path '*/src/*'`): they were matched against Windows' `.\\src\\a.txt`, though find prints `./src/a.txt`. They're matched against what it prints. Found by the new look-alike cases.
 - **`more` into a pipe** paged (the bundled `more`); Windows' own `more`, which sill runs as `cat` there, is used instead.
