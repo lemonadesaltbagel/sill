@@ -88,6 +88,9 @@ mod compat_cmds;
 // sill: ps, pgrep, pkill, killall on Windows; compiled everywhere for its tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod procs;
+// sill: chmod on Windows (the read-only attribute); compiled everywhere for its tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod chmod_windows;
 // sill: lsof's file and port questions on Windows; compiled everywhere for its tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod lsof;

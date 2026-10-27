@@ -1096,8 +1096,11 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
                     cmd_output.retain(|c| c != '\0');
                 }
 
-                // We trim trailing newlines, per spec.
-                let trimmed_len = cmd_output.trim_end_matches('\n').len();
+                // We trim trailing newlines, per spec. sill: on Windows, trailing CRLF line
+                // endings too, as Git Bash does: native programs end lines with CRLF in a
+                // pipe, and `x=$(python -c 'print(42)')` was `42\r`, so `[ "$x" = 42 ]` failed
+                // and a path from `$(...)` didn't exist. A `\r` within the text is kept.
+                let trimmed_len = trim_trailing_newlines(&cmd_output).len();
                 cmd_output.truncate(trimmed_len);
 
                 Expansion::from(ExpansionPiece::Splittable(cmd_output))
@@ -2531,5 +2534,38 @@ mod tests {
         assert_eq!(to_initial_capitals("ab bc cd"), String::from("Ab Bc Cd"));
         assert_eq!(to_initial_capitals(" a "), String::from(" A "));
         assert_eq!(to_initial_capitals(""), String::new());
+    }
+}
+
+/// sill: `text` without its trailing newlines (and, on Windows, CRLF line endings).
+fn trim_trailing_newlines(text: &str) -> &str {
+    let mut t = text;
+    loop {
+        let before = t.len();
+        t = t.trim_end_matches('\n');
+        if cfg!(windows) && let Some(rest) = t.strip_suffix('\r') && t.len() < before {
+            t = rest;
+        }
+        if t.len() == before {
+            return t;
+        }
+    }
+}
+
+#[cfg(test)]
+mod trailing_newline_tests {
+    use super::trim_trailing_newlines as trim;
+
+    #[test]
+    fn newlines_and_crlf() {
+        assert_eq!(trim("42\n\n"), "42");
+        assert_eq!(trim("a\nb"), "a\nb");
+        if cfg!(windows) {
+            assert_eq!(trim("42\r\n"), "42");
+            assert_eq!(trim("a\r\nb\r\n\r\n"), "a\r\nb");
+            assert_eq!(trim("x\r"), "x\r");
+        } else {
+            assert_eq!(trim("42\r\n"), "42\r");
+        }
     }
 }

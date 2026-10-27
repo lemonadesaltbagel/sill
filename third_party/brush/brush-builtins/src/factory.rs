@@ -184,6 +184,9 @@ pub fn default_builtins<SE: brush_core::ShellExtensions>(
         m.insert("nohup".into(), builtins::Registration::of::<compat_cmds::RunCommand>());
         m.insert("setsid".into(), builtins::Registration::of::<compat_cmds::RunCommand>());
     }
+    // sill: Windows has no chmod; see chmod_windows.rs.
+    #[cfg(windows)]
+    m.insert("chmod".into(), builtins::Registration::of::<chmod_windows::ChmodCommand>());
     // sill: which process holds a file or a port; see lsof.rs.
     #[cfg(windows)]
     m.insert("lsof".into(), builtins::Registration::of::<lsof::LsofCommand>());
