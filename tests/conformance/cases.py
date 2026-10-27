@@ -145,7 +145,7 @@ CASES = [
      "timeout": 3, "check": lambda o, e, c, s: b"never" not in o, "after_no_process": "-n 43"},
     {"id": "proc-detached-survives", "cat": "process",
      "why": "A program a finished command deliberately left running (`start`, an editor, a build daemon) keeps running after the shell exits.",
-     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'start /b ping -n 44 127.0.0.1 >nul'; echo started",
+     "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'start /b ping -n 44 127.0.0.1 >nul 2>&1'; echo started",
      "expect": "started\n", "after_running": "-n 44", "direct_only": True},
     {"id": "proc-bg-releases-pipe", "cat": "process",
      "why": "A background job doesn't keep the harness's output pipe open (harnesses wait for it).",

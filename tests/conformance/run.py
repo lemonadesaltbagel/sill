@@ -163,9 +163,11 @@ def run_via_mcp(shell, script, work, timeout):
     finally:
         client.close()
     text = "".join(c.get("text", "") for c in result.get("content", []))
-    # The text ends with a footer line: `--- exit N · cwd ... ---` (or `--- stopped after`).
-    m = re.search(r"(?:\A|\n)--- (?:exit (-?\d+)|.*?)[^\n]*---\Z", text)
-    body = text[:m.start()] if m else text
+    # The output ends with a footer line, `--- exit N · cwd ... ---` (or `--- stopped after
+    # ...`), and maybe a note after it (programs the command left running).
+    footers = list(re.finditer(r"^--- (?:exit (-?\d+)\b|stopped )[^\n]*---$", text, re.M))
+    m = footers[-1] if footers else None
+    body = text[:m.start()].removesuffix("\n") if m else text
     code = int(m.group(1)) if m and m.group(1) else -1
     if body.startswith("--- stderr ---\n"):
         out_part, err_part = "", body[len("--- stderr ---\n"):]
