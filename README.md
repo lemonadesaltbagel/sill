@@ -45,7 +45,7 @@ The pass counts are close. The difference is in the failed calls and the time it
 
 Given the choice, the models moved their shell work to sill: all of it under Gemini CLI, most of it under Codex.
 
-**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,428 of 2,911 runnable cases on Windows (83%). The rest are mostly:
+**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,434 of 2,932 runnable cases on Windows (83%). The rest are mostly:
 - Unix signals and job control, which Windows has no equivalent for;
 - `coproc`;
 - debugging options (`extdebug`, `functrace`) and rarely used `declare` forms;
