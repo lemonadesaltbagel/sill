@@ -1,0 +1,3 @@
+# Failures of brush's compat suite on windows-2025 (Git Bash as the reference) accepted
+# today; see tests/compat/check_baseline.py. Regenerate from the build's compat.json.
+succeeded >= 0

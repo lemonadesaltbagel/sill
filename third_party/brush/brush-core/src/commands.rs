@@ -1074,12 +1074,19 @@ impl<W: std::io::Write> DiagnosticWriter<W> {
 
 impl<W: std::io::Write> std::io::Write for DiagnosticWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        for &b in buf {
+        let mut rest = buf;
+        while !rest.is_empty() {
             if !self.line_start {
-                self.inner.write_all(&[b])?;
-                self.line_start = b == b'\n';
+                // The rest of the line goes out in one write.
+                let end = rest.iter().position(|&b| b == b'\n').map_or(rest.len(), |i| i + 1);
+                self.inner.write_all(&rest[..end])?;
+                self.line_start = rest[end - 1] == b'\n';
+                rest = &rest[end..];
                 continue;
             }
+            // At a line's start, hold bytes while they could be the builtin's own name.
+            let b = rest[0];
+            rest = &rest[1..];
             self.held.push(b);
             let own = self.own_prefix.as_bytes();
             if self.held.len() == own.len() && self.held == own {
@@ -1105,5 +1112,37 @@ impl<W: std::io::Write> std::io::Write for DiagnosticWriter<W> {
 impl<W: std::io::Write> Drop for DiagnosticWriter<W> {
     fn drop(&mut self) {
         let _ = std::io::Write::flush(self);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_writer_tests {
+    use super::DiagnosticWriter;
+    use std::io::Write as _;
+
+    fn run(chunks: &[&str]) -> String {
+        let mut out = Vec::new();
+        {
+            let mut w = DiagnosticWriter {
+                inner: &mut out,
+                shell_prefix: "x.sh: line 3: ".into(),
+                own_prefix: "printf: ".into(),
+                held: Vec::new(),
+                line_start: true,
+            };
+            for c in chunks {
+                w.write_all(c.as_bytes()).unwrap();
+            }
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn prefixes_the_builtins_own_lines_only() {
+        assert_eq!(run(&["printf: bad\n"]), "x.sh: line 3: printf: bad\n");
+        assert_eq!(run(&["pri", "ntf: ", "bad\nother\n"]), "x.sh: line 3: printf: bad\nother\n");
+        assert_eq!(run(&["Name: "]), "Name: ");
+        assert_eq!(run(&["a\nprintf: b\n"]), "a\nx.sh: line 3: printf: b\n");
+        assert_eq!(run(&["pr"]), "pr");
     }
 }

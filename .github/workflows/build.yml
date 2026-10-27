@@ -51,7 +51,7 @@ jobs:
     name: sill on Windows (tests, package, distribution checks)
     needs: tools
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,6 +77,40 @@ jobs:
           dist\sill\bash.exe --version
           dist\sill\bash.exe scripts/dist-check.sh 2>&1 | Tee-Object dist-check.txt
           if ($LASTEXITCODE -ne 0) { throw "dist-check failed" }
+      - name: Build echoargs (MSVC)
+        shell: cmd
+        run: call tests\echoargs\build-echoargs.cmd "%RUNNER_TEMP%\echoargs.exe"
+      - name: Conformance (bash.exe -c and the MCP server; every case must pass)
+        shell: pwsh
+        run: |
+          python tests\conformance\run.py --shell "sill=$PWD\dist\sill\bash.exe" `
+            --mcp "sill-mcp=$PWD\dist\sill\bash.exe" `
+            --echoargs "$env:RUNNER_TEMP\echoargs.exe" --out conformance.json --report conformance.md
+          Get-Content conformance.md | Add-Content $env:GITHUB_STEP_SUMMARY
+          python -c "import json,sys; r=json.load(open('conformance.json',encoding='utf-8'))['results']; bad=[f'{c} ({s})' for c,v in r.items() for s,x in v.items() if not x['pass']]; print('failing:', bad); sys.exit(1 if bad else 0)"
+      - name: brush compat suite (Git Bash as the reference; no new failures)
+        shell: pwsh
+        working-directory: third_party/brush
+        env:
+          BASH_PATH: C:\Program Files\Git\bin\bash.exe
+          # The shell under test: the packaged bash.exe, not the harness's default brush.
+          BRUSH_PATH: ${{ github.workspace }}\dist\sill\bash.exe
+          # The interpreter is measured, not busybox against GNU tools: the oracle's tools for both.
+          SILL_NO_TOOLS: "1"
+          # The harness keeps a PATH directory only if it has a file named exactly `sh`.
+          BRUSH_TEST_PATH_VAR: C:\Program Files\Git\usr\bin
+        run: |
+          python -m pip install -q pyyaml
+          python "$env:GITHUB_WORKSPACE\tests\compat\filter_cases.py" brush-shell\tests\cases\compat "$env:RUNNER_TEMP\compat-cases"
+          $env:PATH = "C:\Program Files\Git\usr\bin;$env:PATH"
+          cargo test --release --test brush-compat-tests --no-run
+          if ($LASTEXITCODE) { throw "compat test build failed" }
+          python "$env:GITHUB_WORKSPACE\tests\compat\run_compat.py" --brush-dir . --target-dir "$env:CARGO_TARGET_DIR" `
+            --cases "$env:RUNNER_TEMP\compat-cases" --timeout 120 --summary "$env:GITHUB_WORKSPACE\compat.md" `
+            --log "$env:GITHUB_WORKSPACE\compat.log" --json "$env:GITHUB_WORKSPACE\compat.json"
+          Get-Content "$env:GITHUB_WORKSPACE\compat.md" -TotalCount 3 | Add-Content $env:GITHUB_STEP_SUMMARY
+          python "$env:GITHUB_WORKSPACE\tests\compat\check_baseline.py" "$env:GITHUB_WORKSPACE\compat.json" `
+            "$env:GITHUB_WORKSPACE\tests\compat\baseline-windows.txt"
       - name: Checksum
         shell: pwsh
         run: |
@@ -89,11 +123,38 @@ jobs:
             dist/sill-windows-x64.zip
             dist/sill-windows-x64.zip.sha256
             dist-check.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-results
+          path: |
+            conformance.json
+            conformance.md
+            compat.json
+            compat.md
+            compat.log
+          if-no-files-found: warn
+
+  linux-compat:
+    name: brush compat suite on Linux (bash as the reference)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compat suite (a failure without a known_failure mark, or a pass with one, fails)
+        working-directory: third_party/brush
+        run: |
+          bash --version | head -1
+          cargo test --release --test brush-compat-tests
 
   release:
     name: Publish the release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: windows
+    needs: [windows, linux-compat]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
