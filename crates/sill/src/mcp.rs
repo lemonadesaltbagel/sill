@@ -433,6 +433,13 @@ impl Server {
                 cmd.env(k, v);
             }
         }
+        // Java writes into a pipe in the ANSI code page (JEP 400), which loses what that code
+        // page can't hold (`??` for Chinese on English Windows); this asks it for UTF-8. Its
+        // "Picked up" note is taken out of the output ([`shape`]). A value of the user's own,
+        // even an empty one, is left alone.
+        if cfg!(windows) && !session.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("JAVA_TOOL_OPTIONS")) {
+            cmd.env("JAVA_TOOL_OPTIONS", JAVA_UTF8);
+        }
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::fs::File::create(out)?);
         cmd.stderr(std::fs::File::create(err)?);
@@ -648,6 +655,7 @@ const fn from_code_page(_bytes: &[u8], _cp: u32) -> Option<String> {
 /// Returns whether it was cut.
 fn shape(bytes: &[u8], file: &Path) -> (String, bool) {
     let text = strip_ansi(&decode(bytes)).replace("\r\n", "\n");
+    let text = without_java_note(&text);
     let count = text.chars().count();
     if count <= SHOWN_HEAD + SHOWN_TAIL {
         return (text, false);
@@ -662,6 +670,20 @@ fn shape(bytes: &[u8], file: &Path) -> (String, bool) {
         ),
         true,
     )
+}
+
+/// What the server sets `JAVA_TOOL_OPTIONS` to (see [`Server::spawn`]).
+const JAVA_UTF8: &str = "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8";
+
+/// `text` without the note each JVM prints for the server's own `JAVA_TOOL_OPTIONS`.
+fn without_java_note(text: &str) -> String {
+    let note = format!("Picked up JAVA_TOOL_OPTIONS: {JAVA_UTF8}");
+    if !text.contains(&note) {
+        return text.to_owned();
+    }
+    text.split_inclusive('\n')
+        .filter(|line| line.trim_end_matches('\n') != note)
+        .collect()
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -869,6 +891,16 @@ mod tests {
         let (text, cut) = shape(long.as_bytes(), Path::new("C:\\t\\out"));
         assert!(cut);
         assert!(text.contains("5 characters left out; the whole output is in C:/t/out"), "{text}");
+    }
+
+    #[test]
+    fn the_java_note_is_left_out() {
+        let note = format!("Picked up JAVA_TOOL_OPTIONS: {JAVA_UTF8}\n");
+        let (text, _) = shape(format!("{note}err: x\n{note}").as_bytes(), Path::new("f"));
+        assert_eq!(text, "err: x\n");
+        // Someone else's options are theirs to see.
+        let theirs = "Picked up JAVA_TOOL_OPTIONS: -Xmx1g\n";
+        assert_eq!(shape(theirs.as_bytes(), Path::new("f")).0, theirs);
     }
 
     #[test]

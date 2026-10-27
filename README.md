@@ -19,12 +19,12 @@ sill takes each of these on directly, with a test for each.
 
 All measured on Windows 11 with the Git Bash that ships with Git for Windows as the comparison.
 
-**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 56 cases, run through `bash.exe -c` and through the MCP server (56/56 both ways) covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
+**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 59 cases, run through `bash.exe -c` and through the MCP server (59/59 both ways) covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
 
 | | sill | Git Bash |
 |---|---|---|
-| GitHub's `windows-2025` runner (en-US) | **56/56** | 43/56 |
-| A Chinese-locale laptop (code page 936) | **56/56** | 39/56 |
+| GitHub's `windows-2025` runner (en-US) | **59/59** | 45/59 |
+| A Chinese-locale laptop (code page 936), 0.4.0 on the first 56 cases | **56/56** | 39/56 |
 
 **Real agents, end to end:** 18 tasks with automatic checks, run with DeepSeek's low-cost model. The tasks include a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, and an MSVC build. Two runs per task on the Chinese-locale laptop:
 
@@ -44,6 +44,8 @@ The pass counts are close. The difference is in the failed calls and the time it
 | Gemini CLI | **36/36**, 5 of 90, **335 s** | 31/36, 5 of 150, 1195 s |
 
 Given the choice, the models moved their shell work to sill: all of it under Gemini CLI, most of it under Codex.
+
+**0.5.0 on GitHub's runner**, one run per task: every task passed with sill under Claude Code, Codex and Gemini CLI. Failed calls with Codex: sill **0 of 52**, through its MCP server 2 of 58, Git Bash 7 of 64, PowerShell 16 of 86.
 
 **Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,434 of 2,932 runnable cases on Windows (83%). The rest are mostly:
 - Unix signals and job control, which Windows has no equivalent for;
@@ -98,6 +100,8 @@ The installer changes nothing else. sill itself creates one folder: `\tmp` on th
 Each command runs in a fresh sill process, inside a Job Object it joins before it starts. So a crash or a hang can't take the server down, and a timeout or `bash_kill` ends every program the command started. Programs a command leaves running become a background job: the result says so, `bash_output` and `bash_kill` work on them, and they end with the session.
 
 The first command runs in the project the client names (its MCP roots), if it offers one. Otherwise it runs where the client started the server, or in your home folder when that's the client's own install folder (as Claude Desktop does). `SILL_MCP_ROOT` sets it explicitly.
+
+Output is read as UTF-8; a line that isn't is read in the system's ANSI code page (GBK on Chinese Windows), which some programs write into a pipe whatever the console's is. Java does so since JDK 18, and loses what that code page can't hold (Chinese comes out as `??` on English Windows), so the server sets `JAVA_TOOL_OPTIONS=-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` for its commands, and leaves out the `Picked up JAVA_TOOL_OPTIONS` note each JVM prints for it. A value of your own (even an empty one) is kept.
 
 ## What's inside
 
@@ -156,6 +160,7 @@ A value you've already set is kept. All of these are visible with `env`.
 - **Windows has no signals.** Traps for INT and TERM are accepted and listed, but only `EXIT`, `ERR`, `DEBUG` and `RETURN` run. `kill` ends processes.
 - **Unsupported:** `coproc`, stopped jobs (`fg` after Ctrl+Z), passing descriptors above 2 to a program, `exec -a`, and `cp <(cmd) file`.
 - **Programs a finished command leaves running keep running** (`start`, an editor, a build daemon), as from a terminal. A command killed before it finishes, by a harness's timeout for one, takes everything it started with it. Through the MCP server, such leftovers become a background job of the session and end with it.
+- **Java writes its console output in the ANSI code page** when it goes to a pipe (JDK 18 and later), so through `bash.exe -c` non-ASCII text from Java arrives garbled (GBK on Chinese Windows) or as `??` (characters the code page can't hold). sill doesn't change Java's settings there, since the fix makes every JVM print a note on stderr, which breaks scripts that read `java -version 2>&1`. To get UTF-8, set `JAVA_TOOL_OPTIONS=-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` in your environment. The MCP server does this for you.
 - **Process substitution** passes a named pipe (`\\.\pipe\...`), which programs open like a file.
 - **Elevation:** when sill runs elevated, network drives mapped in your normal session aren't visible to it, as for any elevated program.
 - **No `sudo`, `apt` or `systemctl`:** sill doesn't emulate Linux administration. These commands fail with a note naming the Windows way.
