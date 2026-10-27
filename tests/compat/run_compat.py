@@ -124,6 +124,21 @@ if os.name == "nt":
                 self.job, _JOB_BASIC_ACCOUNTING, ctypes.byref(acct), ctypes.sizeof(acct), None)
             return acct.TotalProcesses, acct.ActiveProcesses
 
+        def processes(self):
+            """The command lines of the processes still in the job."""
+            # JOBOBJECT_BASIC_PROCESS_ID_LIST (class 3): two DWORD counts (the second is how
+            # many ids follow), then the ids.
+            buf = (ctypes.c_size_t * 1025)()
+            if not _k32.QueryInformationJobObject(self.job, 3, buf, ctypes.sizeof(buf), None):
+                return []
+            pids = [str(buf[1 + i]) for i in range(min(buf[0] >> 32, 1024))]
+            if not pids:
+                return []
+            ps = ("Get-CimInstance Win32_Process | Where-Object { @(" + ",".join(pids) + ") -contains $_.ProcessId } | "
+                  "ForEach-Object { [string]$_.ProcessId + ' (parent ' + $_.ParentProcessId + ') ' + $_.CommandLine }")
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
+            return out.stdout.decode("utf-8", "replace").splitlines()
+
         def kill_all(self):
             _k32.TerminateJobObject(self.job, 1)
             self.proc.wait()
@@ -139,6 +154,9 @@ else:
 
         def accounting(self):
             return None, None
+
+        def processes(self):
+            return []
 
         def kill_all(self):
             try:
@@ -161,7 +179,8 @@ def test_binary(target_dir):
 
 
 def run_set(exe, set_dir, cwd, timeout, out_path):
-    """Returns (status, total_processes, processes_still_alive_at_end)."""
+    """Returns (status, total_processes, processes_still_alive_at_end, what was running if it
+    hung)."""
     with open(out_path, "wb") as out:
         tree = ProcessTree(
             [exe, "--test-cases-path", str(set_dir)],
@@ -176,9 +195,10 @@ def run_set(exe, set_dir, cwd, timeout, out_path):
         except subprocess.TimeoutExpired:
             status = "HUNG"
         total, alive = tree.accounting()
+        running = tree.processes() if status == "HUNG" else []
         # Kill stragglers either way: leaked background processes would hold files open.
         tree.kill_all()
-        return status, total, alive
+        return status, total, alive, running
 
 
 def remove_with_retry(path, attempts=10):
@@ -273,12 +293,14 @@ def main():
                 shutil.copy2(f, set_dir / rel)
                 out_path = cases_root / f"set-{i:03d}.out"
                 t0 = time.monotonic()
-                status, total, alive = run_set(exe, set_dir, shell_dir, a.timeout, out_path)
+                status, total, alive, running = run_set(exe, set_dir, shell_dir, a.timeout, out_path)
                 secs = round(time.monotonic() - t0)
                 text = out_path.read_text(encoding="utf-8", errors="replace")
                 remove_with_retry(out_path)
                 remove_with_retry(set_dir)
                 log.write(f"===== {rel} [{status}, {secs}s, procs={total}, left={alive}]\n{text}\n")
+                if running:
+                    log.write("Still running when it was stopped:\n" + "".join(f"  {r}\n" for r in running))
                 log.flush()
                 counts, unexpected, errors = parse(text)
                 if counts:

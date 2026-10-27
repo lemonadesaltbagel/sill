@@ -179,7 +179,11 @@ pub(crate) fn push_args(
         // dialect, like the bundled coreutils: `find /c/...` found nothing before. Other
         // programs' arguments are never rewritten.
         let args: Vec<String> = if is_sill_tool(program) {
-            args.into_iter().map(|a| map_tool_arg(&a).unwrap_or(a)).collect()
+            let patterns = sill_winargs::tool_pattern_args(&program.file_stem().unwrap_or_default().to_string_lossy(), &args);
+            args.into_iter()
+                .zip(patterns)
+                .map(|(a, pattern)| if pattern { a } else { map_tool_arg(&a).unwrap_or(a) })
+                .collect()
         } else {
             args
         };
@@ -288,11 +292,13 @@ fn is_sill_tool(program: &std::path::Path) -> bool {
         .is_some_and(|parent| norm(parent).trim_end_matches('\\') == norm(std::path::Path::new(&dir)).trim_end_matches('\\'))
 }
 
-/// sill: a `/c/...` argument to one of sill's tools, as the Windows path, when that
-/// path or its parent directory exists (so a pattern like `/a/b` stays as written).
+/// sill: a `/c/...` argument to one of sill's tools, as the Windows path, when that path
+/// exists, or its parent does and isn't just the drive (`sort -o /c/work/out.txt`). A
+/// `/c/d` whose only existing part is the drive is more likely text than a file in `C:\`.
 #[cfg(windows)]
 fn map_tool_arg(arg: &str) -> Option<String> {
     let mapped = crate::sys::fs::map_shell_path(std::path::Path::new(arg))?;
-    (mapped.exists() || mapped.parent().is_some_and(std::path::Path::exists))
+    let parent_is_drive = mapped.parent().is_none_or(|p| p.parent().is_none());
+    (mapped.exists() || (!parent_is_drive && mapped.parent().is_some_and(std::path::Path::exists)))
         .then(|| mapped.to_string_lossy().into_owned())
 }

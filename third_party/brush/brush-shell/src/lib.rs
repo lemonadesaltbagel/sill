@@ -11,3 +11,4 @@ mod error_formatter;
 pub mod events;
 /// sill: public, for sill's `--version`.
 pub mod productinfo;
+pub mod session_state;

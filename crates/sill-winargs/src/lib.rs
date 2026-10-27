@@ -463,3 +463,133 @@ mod dev_null_tests {
         }
     }
 }
+
+/// sill: which of a tool's arguments are a pattern or a script rather than a path, so they
+/// aren't read as `/c/...` paths: `sed '/c/d'`, `awk '/c/ {n++}'`, `grep '/c/' f`, and the
+/// patterns of `find -name`, `-path` and kin. Without `-e`/`-f`, the first operand of grep
+/// and sed, and of awk without `-f`, is the pattern or script.
+pub fn tool_pattern_args(tool: &str, args: &[String]) -> Vec<bool> {
+    let tool = tool.to_ascii_lowercase();
+    let mut out = vec![false; args.len()];
+    match tool.as_str() {
+        "grep" | "egrep" | "fgrep" | "sed" | "awk" | "gawk" => {
+            let is_awk = tool.ends_with("awk");
+            // Options whose value is the next argument; for -e that value is a pattern.
+            let pattern_opt = |a: &str| if is_awk { false } else { a == "-e" || a == "--regexp" || a == "--expression" };
+            let file_opt = |a: &str| a == "-f" || a == "--file";
+            let valued = |a: &str| {
+                if is_awk {
+                    matches!(a, "-v" | "-F")
+                } else if tool == "sed" {
+                    matches!(a, "-l")
+                } else {
+                    matches!(a, "-A" | "-B" | "-C" | "-m" | "-d" | "-D" | "--context" | "--max-count" | "--label")
+                }
+            };
+            let explicit = args.iter().any(|a| {
+                pattern_opt(a)
+                    || file_opt(a)
+                    || (!is_awk && (a.starts_with("--regexp=") || a.starts_with("--expression=")))
+                    || a.starts_with("--file=")
+                    || (a.len() > 2 && a.starts_with("-e") && !is_awk)
+            });
+            let mut first_operand_done = explicit;
+            let mut i = 0;
+            let mut options_done = false;
+            while i < args.len() {
+                let a = args[i].as_str();
+                if !options_done && a == "--" {
+                    options_done = true;
+                } else if !options_done && pattern_opt(a) {
+                    if let Some(v) = out.get_mut(i + 1) {
+                        *v = true;
+                    }
+                    i += 1;
+                } else if !options_done && (file_opt(a) || valued(a)) {
+                    i += 1;
+                } else if !options_done && a.len() > 1 && a.starts_with('-') {
+                    // `-eX` (an attached pattern) is itself a pattern; other options aren't paths.
+                    out[i] = !is_awk && a.starts_with("-e") && a.len() > 2;
+                } else if !first_operand_done {
+                    out[i] = true;
+                    first_operand_done = true;
+                }
+                i += 1;
+            }
+        }
+        "find" => {
+            for i in 1..args.len() {
+                out[i] = matches!(
+                    args[i - 1].as_str(),
+                    "-name" | "-iname" | "-path" | "-ipath" | "-regex" | "-iregex" | "-wholename" | "-iwholename" | "-lname" | "-ilname"
+                );
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+#[cfg(test)]
+mod pattern_arg_tests {
+    use super::tool_pattern_args as pattern_args;
+
+    fn patterns(tool: &str, args: &[&str]) -> Vec<bool> {
+        pattern_args(tool, &args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn scripts_and_patterns_are_not_paths() {
+        assert_eq!(patterns("sed", &["/c/d", "/c/work/f.txt"]), [true, false]);
+        assert_eq!(patterns("sed", &["-i", "-e", "/c/d", "/c/work/f.txt"]), [false, false, true, false]);
+        assert_eq!(patterns("sed", &["-f", "/c/work/s.sed", "/c/work/f.txt"]), [false, false, false]);
+        assert_eq!(patterns("awk", &["/c/ {n++}", "/c/work/log"]), [true, false]);
+        assert_eq!(patterns("awk", &["-F", ":", "-v", "x=1", "/c/ {print}", "f"]), [false, false, false, false, true, false]);
+        assert_eq!(patterns("awk", &["-f", "/c/work/p.awk", "/c/work/log"]), [false, false, false]);
+        assert_eq!(patterns("grep", &["-n", "/c/", "/c/work/paths.txt"]), [false, true, false]);
+        assert_eq!(patterns("grep", &["-A", "2", "/c/", "f"]), [false, false, true, false]);
+        assert_eq!(patterns("grep", &["-e", "/c/", "-e", "/d/", "/c/work"]), [false, true, false, true, false]);
+        assert_eq!(patterns("grep", &["--", "-x", "/c/work"]), [false, true, false]);
+        assert_eq!(patterns("find", &["/c/work", "-path", "/c/work/*.txt"]), [false, false, true]);
+        assert_eq!(patterns("ls", &["/c/d"]), [false]);
+    }
+}
+
+/// Programs that wait for a person at a terminal, by kind (see [`needs_a_person`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NeedsPerson {
+    /// An editor (`vi`, `nano`, ...): waits for keystrokes.
+    Editor,
+    /// A pager (`more`, `less`): waits for a key at each screen.
+    Pager,
+}
+
+/// Whether the program named `stem` (a file name without `.exe`) waits for a person: an
+/// agent's commands have none, and `vi notes.txt`, or the editor `git commit` starts, then
+/// waited until the harness's timeout.
+pub fn needs_a_person(stem: &str) -> Option<NeedsPerson> {
+    let stem = stem.to_ascii_lowercase();
+    match stem.as_str() {
+        "vi" | "vim" | "nvim" | "view" | "vimdiff" | "gvim" | "nano" | "pico" | "emacs" | "micro" | "joe" | "ne" => {
+            Some(NeedsPerson::Editor)
+        }
+        "more" | "less" | "most" => Some(NeedsPerson::Pager),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod needs_a_person_tests {
+    use super::{NeedsPerson, needs_a_person};
+
+    #[test]
+    fn editors_and_pagers() {
+        assert_eq!(needs_a_person("vim"), Some(NeedsPerson::Editor));
+        assert_eq!(needs_a_person("NANO"), Some(NeedsPerson::Editor));
+        assert_eq!(needs_a_person("more"), Some(NeedsPerson::Pager));
+        assert_eq!(needs_a_person("less"), Some(NeedsPerson::Pager));
+        assert_eq!(needs_a_person("git"), None);
+        assert_eq!(needs_a_person("vite"), None);
+        assert_eq!(needs_a_person("lesson"), None);
+    }
+}

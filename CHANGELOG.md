@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixes (from a code review)
+- **`sed '/c/d'`, `awk '/c/ {n++}'` and `grep '/c/'`** reached the tool as `C:/d`, `C:/ {n++}` and `C:/`: arguments to sill's bundled tools that look like `/c/...` paths were rewritten whenever `C:\` existed. Scripts and patterns (the first operand of grep, sed and awk, `-e` values, `find -name`/`-path` patterns) are no longer rewritten, and a path is rewritten only when it exists, or its parent does and isn't just the drive.
+- **MCP server: a command's own `trap ... EXIT` lost the session's state** (its `cd` and exports), silently: the server recorded them in an EXIT trap of its own, which the command's replaced. The shell now records them itself as it ends, after the command's trap.
+
+### MCP server
+- **Functions, aliases and options carry over** between calls (`deactivate` after activating a virtual environment, `set -o pipefail`), not only the directory and exported variables. `set -e` doesn't.
+- **One process fewer per call:** the state is saved by the command's shell, not by a second sill.
+
+### Programs that wait for a person
+- **`git commit` without `-m` stops at once** instead of waiting for an editor until the harness's timeout: when sill has no terminal and nothing names an editor for git, git's editor is sill, which says why and leaves the message as it is. `git commit --amend` and `git rebase --continue` keep theirs.
+- **`vi notes.txt`** (and vim, nano, emacs, ...) with no terminal says there's none and fails, instead of waiting.
+- **`more` and `less` writing to a pipe or file** are `cat` (Windows' `more` waited for a key).
+
+### Process start
+- **Starting a program resumes it with one call** (`NtResumeProcess`) instead of a snapshot of every thread on the machine.
+
+### Checks
+- **Conformance:** Windows file-system cases (paths past 260 characters, files another program holds open, junctions, read-only files and git's objects, case-only renames, symlinks), programs that prompt, and look-alikes (inputs that resemble what a sill rule acts on, which it must leave alone).
+
 ## 0.5.0 (2026-10-27)
 
 ### Process lifetimes (Windows Job Objects)

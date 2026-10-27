@@ -125,6 +125,23 @@ fn directory_and_exports_carry_over() {
 }
 
 #[test]
+fn a_commands_own_exit_trap_doesnt_lose_the_state() {
+    let mut c = Client::start(&workdir("trap"));
+    let r = c.bash("mkdir -p build && cd build && export SILL_T=kept; tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT");
+    assert!(r.contains("/build · "), "{r}");
+    let r = c.bash("echo \"[$(basename \"$PWD\")] [$SILL_T]\"");
+    assert!(r.starts_with("[build] [kept]\n"), "{r}");
+}
+
+#[test]
+fn functions_aliases_and_options_carry_over() {
+    let mut c = Client::start(&workdir("funcs"));
+    c.bash("greet() { echo \"hi $1\"; }; alias say='echo said'; set -o pipefail; set -e");
+    let r = c.bash("greet there; say it; false | true; echo \"pipefail=$?\"; false; echo \"after false\"");
+    assert!(r.starts_with("hi there\nsaid it\npipefail=1\nafter false\n"), "{r}");
+}
+
+#[test]
 fn text_is_utf8_and_plain() {
     let mut c = Client::start(&workdir("text"));
     let r = c.bash("printf '\\033[1;31m中文 ✓\\033[0m\\r\\n'");
