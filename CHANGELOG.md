@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-27)
 
 ### Process lifetimes (Windows Job Objects)
 - **Every program sill starts joins a Job Object before it runs.** A process tree followed through parent PIDs loses processes whose parent has exited, and so does `taskkill /T`, how harnesses stop commands. A job doesn't.
@@ -10,12 +10,14 @@
 - **MCP server:** commands join their job before starting (no window for a grandchild to escape). Programs a command leaves running become a background job of the session, reported in the result, and end with the session. The first command runs in the client's project root, or the home folder rather than a client's install folder (a folder in the temporary folder stays where it is).
 - **`kill`** takes every signal whose default is to end a process (`USR1`, `ALRM`, ...; it ends the process tree, with 128 + the number), refuses the ones that would stop, continue or be ignored rather than end it, and `kill -l` lists or translates them as bash does (`kill -l 143` is `TERM`). An invalid signal is status 1, as in bash.
 - **MCP output in the system's code page:** a line that isn't UTF-8 (Java since JEP 400 writes GBK into a pipe on Chinese Windows) is read in the ANSI code page when that reads it cleanly.
+- **Java through the MCP server writes UTF-8:** the server sets `JAVA_TOOL_OPTIONS=-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` for its commands (unless you set your own) and leaves out the note each JVM prints for it. Without it, Java loses what the ANSI code page can't hold (`??` for Chinese on English Windows). Measured on GitHub's runner and in a zh-CN Windows container (code page 936). Through `bash.exe -c`, Java's settings are left alone; Known limits says how to get UTF-8 there.
 
 ### Checks
 - **The build runs the evidence:** the 59 conformance cases, directly and through MCP (all must pass; three are new, for process lifetimes), brush's compat suite on Windows against Git Bash (no failure beyond a committed baseline), and on Linux against bash.
 - **Builtins' diagnostics** are written a line at a time, not a byte at a time.
 
 ### Docs
+- **Java's output encoding** is in Known limits.
 - **`/tmp` semantics** are in Known limits: one folder per drive, created at the drive's root with its permissions.
 
 ## 0.4.0 (2026-10-24)

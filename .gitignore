@@ -1,4 +1,6 @@
 /target/
+/research/vendor/
+/research/build-logs/
 __pycache__/
 /target-gnu/
 .DS_Store
