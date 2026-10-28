@@ -24,6 +24,7 @@ Fields:
 """
 
 import json
+import re
 
 
 def _json(b):
@@ -64,6 +65,10 @@ CASES = [
     argv("argv-unicode", "'中文 😀'", ["中文 😀"], "Non-ASCII arguments arrive as written."),
     argv("argv-slash-options", "/p:Configuration=Release /EHsc", ["/p:Configuration=Release", "/EHsc"],
          "MSBuild and cl switches are not paths; rewriting them breaks build commands."),
+    {"id": "argv-drive-path-existing", "cat": "argv",
+     "why": "An existing path in `/d/...` form reaches a native program as its Windows path (`python /d/work/solve.py`).",
+     "script": "mkdir -p sub && p=$(cygpath -u \"$PWD\")/sub && \"{echoargs}\" \"$p\"",
+     "check": lambda o, e, c, s: re.match(r"^[A-Za-z]:[/\\].*sub$", (_json(o) or [""])[0]) is not None},
     argv("argv-option-value", "--prefix=/usr/local", ["--prefix=/usr/local"],
          "An option value is not rewritten into a Windows path behind the program's back."),
     {"id": "argv-long", "cat": "argv", "why": "A 20,000-character argument (generated JSON, code) arrives whole.",
@@ -294,6 +299,12 @@ CASES = [
     {"id": "alike-cmd-dev-null-word", "cat": "alike",
      "why": "`/dev/null` as a word (not after `>`) in text for cmd.exe stays as written.",
      "script": "MSYS_NO_PATHCONV=1 cmd.exe /d /c 'echo /dev/null'", "expect": "/dev/null\n"},
+    argv("alike-native-missing-path", "/c/no/such/dir/here.txt", ["/c/no/such/dir/here.txt"],
+         "A `/c/...` argument to a native program that names nothing reaches it as written.", cat="alike"),
+    argv("alike-native-switches", "/c /s /q /c/", ["/c", "/s", "/q", "/c/"],
+         "Switches like `/c` and `/s` (and a bare drive) aren't read as drive paths.", cat="alike"),
+    argv("alike-native-option-value", "--dir=/c/Windows", ["--dir=/c/Windows"],
+         "Only a whole argument is a path; `--dir=/c/...` reaches the program as written.", cat="alike"),
     argv("alike-unc-not-switch", "//server/share", ["//server/share"],
          "A `//server/share` path isn't a `//c`-style switch.", cat="alike"),
     {"id": "alike-npm-bash-script", "cat": "alike",

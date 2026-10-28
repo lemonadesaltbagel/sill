@@ -115,7 +115,7 @@ Output is read as UTF-8; a line that isn't is read in the system's ANSI code pag
 - **Background jobs** (`server > log 2>&1 &`) don't hold the harness's output pipe. `kill`, `pkill` and `killall` end whole process trees, but never the harness or the Windows session's processes.
 
 **Paths and text**
-- **Paths:** `$PWD`, `~`, `$HOME` and `$TMPDIR` use `C:/...` form, and `/c/...` and `/tmp` work wherever the shell opens a file. Arguments to other programs are never rewritten.
+- **Paths:** `$PWD`, `~`, `$HOME` and `$TMPDIR` use `C:/...` form, and `/c/...` and `/tmp` work wherever the shell opens a file. An argument to another program is rewritten only when the whole argument is a `/c/...` path to something that exists (`python /d/work/solve.py` gets `D:/work/solve.py`); switches like `/c` or `/s`, a bare drive, a path that doesn't exist and `--opt=/c/...` reach the program as written.
 - **No console windows:** a shell started without a console, as Claude Code starts it, gets one invisible UTF-8 console. No window opens per command, and Windows' messages arrive readable.
 - **Error messages:** system errors use POSIX wording ("No such file or directory"), not Windows' sentence in the user's language.
 - **git** prints non-ASCII paths unescaped.
