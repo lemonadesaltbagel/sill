@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixes (from a code review)
+- **`python /d/work/solve.py`** opened `D:\\d\\work\\solve.py`: a `/c/...` path reached native programs as written. Now a whole argument in that form that names something existing is passed as its Windows path, as Git Bash would; switches (`/c`, `/s`), a bare drive, paths that don't exist and `--opt=/c/...` are left alone (look-alike cases check each).
 - **`chmod` was missing** (`chmod +x build.sh && ./build.sh` failed with "command not found" without Git's tools on PATH, and Git's MSYS `chmod` reads `/tmp` as its own folder). It's a builtin now: a mode with the owner's write permission makes a file writable, one without makes it read-only; execute bits succeed and change nothing (Windows runs programs by extension; sill runs `#!` scripts as they are).
 - **`$(...)` of a native program's output kept a CR** (`x=$(python -c 'print(42)')` was `42\r`): trailing CRLF line endings are trimmed as trailing newlines are, as in Git Bash. Found by Terminal-Bench (a path from `$(python ...)` didn't exist).
 - **A loop reading a process substitution inside `$(...)` hung** (`x=$(while read -r l; do ...; done < <(find ...); echo $n)`): the producer was queued behind the blocked reader on the same runtime thread. It runs on a thread of its own now. Found by running Terminal-Bench's reference solutions; likely also the compat suite's rare `redirection.yaml` hang.

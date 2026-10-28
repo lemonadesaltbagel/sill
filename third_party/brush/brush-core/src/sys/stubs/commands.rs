@@ -185,7 +185,10 @@ pub(crate) fn push_args(
                 .map(|(a, pattern)| if pattern { a } else { map_tool_arg(&a).unwrap_or(a) })
                 .collect()
         } else {
-            args
+            // Other programs get a `/c/...` argument as the Windows path only when it names
+            // something that exists (`python /d/work/solve.py`, as Git Bash would pass it):
+            // never a bare drive (`/c`, `/s`: switches), never text that only starts like one.
+            args.into_iter().map(|a| map_native_arg(&a).unwrap_or(a)).collect()
         };
         // sill's bundled jq writes CRLF unless -b; `$(jq -r .x)` then kept a CR.
         let args = if is_sill_tool(program)
@@ -290,6 +293,15 @@ fn is_sill_tool(program: &std::path::Path) -> bool {
     program
         .parent()
         .is_some_and(|parent| norm(parent).trim_end_matches('\\') == norm(std::path::Path::new(&dir)).trim_end_matches('\\'))
+}
+
+/// sill: a `/c/...` argument to another program, as the Windows path, when that path
+/// exists and is more than a drive (see `push_args`).
+#[cfg(windows)]
+fn map_native_arg(arg: &str) -> Option<String> {
+    let mapped = crate::sys::fs::map_shell_path(std::path::Path::new(arg))?;
+    let is_drive = mapped.parent().is_none();
+    (!is_drive && mapped.exists()).then(|| mapped.to_string_lossy().into_owned())
 }
 
 /// sill: a `/c/...` argument to one of sill's tools, as the Windows path, when that path
