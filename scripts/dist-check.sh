@@ -35,6 +35,12 @@ check "cygpath -w" 'C:\Windows' "$(cygpath -w /c/Windows)"
 echo needle > "한국어 😀.txt"
 check "GNU grep opens a name outside the code page" "한국어 😀.txt" "$(grep -l needle "한국어 😀.txt")"
 mkdir -p fe/sub && echo x > fe/sub/n.txt
+printf '#!/bin/sh\necho ran\n' > run.sh
+check "chmod +x, then run" "ran" "$(chmod +x run.sh && ./run.sh)"
+check "chmod a-w makes a file read-only" "yes" "$(echo x > ro.txt && chmod a-w ro.txt && { [ -w ro.txt ] && echo no || echo yes; })"
+check "chmod u+w makes it writable again" "yes" "$(chmod u+w ro.txt && [ -w ro.txt ] && echo yes)"
+check "x=\$(native program) has no CR" "42" "$(x=$(cmd.exe //d //c echo 42); printf '%s' "$x")"
+rm -f run.sh ro.txt
 check "find -exec gets / paths" "fe/sub/n.txt" "$(find fe -name n.txt -exec grep -l x {} + | tr -d '\r')"
 rm -rf fe
 check "ls of 3000 args (args file)" "3000" "$(mkdir -p many && (cd many && for i in $(seq 1 3000); do : > "a_longish_file_name_$i.txt"; done) && ls many/* | wc -l)"

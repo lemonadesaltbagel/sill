@@ -122,6 +122,10 @@ CASES = [
      "files": {"f.txt": b"x\r\n"}, "script": "grep -c $'\\r' f.txt", "expect": "1\n"},
     {"id": "crlf-binary-pipe", "cat": "crlf", "why": "A pipe passes binary bytes unchanged.",
      "script": "printf 'a\\0b\\r\\nc' | cat | od -An -tx1 | tr -d ' \\n'", "expect": "6100620d0a63"},
+    {"id": "crlf-subst-native", "cat": "crlf", "needs": ["python"],
+     "why": "`$(...)` of a native program's output has no stray CR: `x=$(python -c 'print(42)')` equals 42.",
+     "script": "x=$(python -c 'print(42)'); [ \"$x\" = 42 ] && echo equal || printf '%s' \"$x\" | od -c",
+     "expect": "equal\n"},
     {"id": "crlf-heredoc-lf", "cat": "crlf", "why": "A here-doc writes LF line ends.",
      "script": "cat > f <<'EOF'\nx\nEOF\nod -An -tx1 f | tr -d ' \\n'", "expect": "780a"},
 
@@ -268,6 +272,10 @@ CASES = [
      "timeout": 30, "check": lambda o, e, c, s: s < 25 and "rc=" in text(o)},
 
     # --- look-alikes: sill's rules don't fire on what only resembles their trigger ------------------
+    {"id": "alike-subst-lone-cr", "cat": "alike",
+     "why": "A CR that doesn't end a line stays in `$(...)`'s text, as in bash.",
+     "script": "x=$(printf 'a\\r'); printf '%s' \"$x\" | od -An -tx1 | tr -d ' \\n'; echo",
+     "expect": "610d\n"},
     {"id": "alike-sed-c-script", "cat": "alike",
      "why": "A sed script that starts like a drive path (`/c/d`) reaches sed as written, not as `C:/d`.",
      "script": "printf 'abc\\nxyz\\n' | sed '/c/d'", "expect": "xyz\n"},
