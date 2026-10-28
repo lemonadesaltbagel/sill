@@ -21,6 +21,11 @@ impl brush_core::extensions::ErrorFormatter for Formatter {
         };
 
         let message = match err.kind() {
+            // sill: as bash says it for a command given as a path (`./venv/bin/python`): the
+            // path is what's wrong, not a missing program.
+            brush_core::error::ErrorKind::CommandNotFound(cmd) if cmd.contains(['/', '\\']) => {
+                format!("{cmd}: No such file or directory")
+            }
             brush_core::error::ErrorKind::CommandNotFound(cmd) => match unsupported_hint(cmd) {
                 Some(hint) => format!("{cmd}: command not found ({hint})"),
                 None => format!("{cmd}: command not found"),

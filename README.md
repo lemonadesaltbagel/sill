@@ -17,16 +17,26 @@ sill takes each of these on directly, with a test for each.
 
 ## Results
 
-All measured on Windows 11 with the Git Bash that ships with Git for Windows as the comparison.
+Measured on Windows with the Git Bash that ships with Git for Windows (and, for agents, PowerShell) as the comparison. Every suite, task and runner below is public in [sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests), with a workflow to rerun it.
 
-**Conformance suite** ([sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests)): 59 cases, run through `bash.exe -c` and through the MCP server (59/59 both ways) covering what agents rely on, each with the reason it matters. Areas: arguments to native programs, paths, encoding, line endings, processes, size limits, `#!` scripts, tools, errors.
+### Where Windows gets in the way, sill holds up
 
-| | sill | Git Bash |
-|---|---|---|
-| GitHub's `windows-2025` runner (en-US) | **59/59** | 45/59 |
-| A Chinese-locale laptop (code page 936), 0.4.0 on the first 56 cases | **56/56** | 39/56 |
+**Conformance suite:** 85 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server. sill passes **85/85** both ways; Git Bash passes 64.
 
-**Real agents, end to end:** 18 tasks with automatic checks, run with DeepSeek's low-cost model. The tasks, their checks, the runner for each harness and the comparison script are public in [sill-bash-tests](https://github.com/lemonadesaltbagel/sill-bash-tests) (its `agent-e2e` workflow reruns them with any model). The tasks include a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, and an MSVC build. Two runs per task on the Chinese-locale laptop:
+| area | cases | sill | Git Bash |
+|---|---|---|---|
+| Encoding (non-English text through pipes, file names, git paths) | 7 | **7** | 2 |
+| Arguments to native programs (`*`, quotes, `/` switches, `.bat`) | 13 | **13** | 10 |
+| Tools agents use (`rg`, `ps`, `pgrep`, `make`, `jq`, ...) | 11 | **11** | 9 |
+| Line endings and bytes | 5 | **5** | 3 |
+| Size limits (long scripts, thousands of arguments) | 4 | **4** | 3 |
+| Programs that prompt (`git commit` with no message, `vi`, pagers) | 4 | **4** | 1 |
+| Look-alikes (inputs sill's rules must leave alone) | 12 | **12** | 7 |
+| Paths, processes, files, scripts, errors | 29 | **29** | 29 |
+
+On a Chinese-locale laptop (code page 936), 0.4.0 passed the first 56 cases, Git Bash 39.
+
+**Real agents, fewer failed commands:** 18 tasks with automatic checks (a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, an MSVC build), DeepSeek's low-cost model, two runs per task on the Chinese-locale laptop:
 
 | harness | sill | Git Bash | PowerShell |
 |---|---|---|---|
@@ -34,9 +44,7 @@ All measured on Windows 11 with the Git Bash that ships with Git for Windows as 
 | opencode | **35/36**, **3** of 104, **403 s** | 35/36, 18 of 149, 622 s | 29/36, 15 of 132, 904 s |
 | Codex CLI | **36/36**, **6** of 136, **634 s** | 36/36, 22 of 172, 846 s | 35/36, 44 of 208, 1094 s |
 
-The pass counts are close. The difference is in the failed calls and the time it took to get there.
-
-**As an MCP server**, added to each harness as it comes (PowerShell remains its own shell), on the same tasks:
+**For harnesses whose shell is PowerShell**, sill's MCP server, added as it comes, on the same tasks:
 
 | harness | with sill's MCP server | PowerShell only |
 |---|---|---|
@@ -45,13 +53,31 @@ The pass counts are close. The difference is in the failed calls and the time it
 
 Given the choice, the models moved their shell work to sill: all of it under Gemini CLI, most of it under Codex.
 
-**0.5.0 on GitHub's runner**, one run per task: every task passed with sill under Claude Code, Codex and Gemini CLI. Failed calls with Codex: sill **0 of 52**, through its MCP server 2 of 58, Git Bash 7 of 64, PowerShell 16 of 86.
+### On everyday coding work, nothing is given up
 
-**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,434 of 2,932 runnable cases on Windows (83%). The rest are mostly:
-- Unix signals and job control, which Windows has no equivalent for;
-- `coproc`;
-- debugging options (`extdebug`, `functrace`) and rarely used `declare` forms;
-- differences in Git Bash itself, such as its `/usr/bin` paths.
+Two public benchmarks, limited to the tasks that work on native Windows at all, with Claude Code and DeepSeek's model. On these, all three shells solve about as many tasks (the differences are within run-to-run variation); sill gets there with fewer failed shell calls.
+
+**[Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-bench-2-1)**, the 26 tasks whose reference solution runs on Windows (build software, process data, train and query models, crack ciphers, debug), two runs each:
+
+| | sill | Git Bash | PowerShell |
+|---|---|---|---|
+| tasks solved | 45/52 | 48/52 | 45/52 |
+| failed shell calls | **72 of 1,120 (6%)** | 78 of 1,150 (7%) | 89 of 1,033 (9%) |
+| turns | **1,100** | 1,302 | 1,429 |
+| time | **6.0 h** | 6.6 h | 6.3 h |
+
+Run without a model, the tasks' reference solutions (correct bash scripts) pass in sill as in Git Bash: 26 against 25.
+
+**[SWE-bench Verified](https://www.swebench.com)**, the 43 of 83 sampled tasks whose tests run on Windows (astropy, django, pytest, requests, sympy, ...), one run each:
+
+| | sill | Git Bash | PowerShell |
+|---|---|---|---|
+| tasks solved | 38/43 | 35/43 | 38/43 |
+| failed shell calls | **20 of 568 (4%)** | 29 of 613 (5%) | 75 of 409 (18%) |
+
+Runs that say nothing about the shell aren't counted: where the model's API failed, a task's environment didn't build, or the agent looked up the task's tests or solution (on the machine or online). The runner reruns just those.
+
+**Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,435 of 2,933 runnable cases on Windows (83%). The rest are mostly Unix signals and job control (Windows has no equivalent), `coproc`, debugging options (`extdebug`, `functrace`), rarely used `declare` forms, and Git Bash's own differences, such as its `/usr/bin` paths.
 
 ## Install
 
