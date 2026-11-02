@@ -224,6 +224,11 @@ pub(crate) fn push_args(
                 .iter()
                 .map(|a| sill_winargs::cmd_dev_null_redirects(a).into_owned())
                 .collect();
+            // `cmd /c build.bat` with the variable that keeps cmd out of the current
+            // folder (Claude Code sets it); see `cmd_local_batch`.
+            let dir = command.get_current_dir().map(std::path::Path::to_path_buf);
+            let here = |name: &str| dir.as_ref().map_or_else(|| std::path::PathBuf::from(name), |d| d.join(name)).is_file();
+            let args = sill_winargs::cmd_local_batch(&args, here).unwrap_or(args);
             let line = sill_winargs::encode_cmd_exe_args(&args).map_err(|err| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, err.to_string())
             })?;

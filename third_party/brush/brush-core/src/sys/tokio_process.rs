@@ -79,9 +79,10 @@ fn compose_std_command(command: LaunchRequest) -> std::io::Result<std::process::
     // Override argv[0].
     // NOTE: Not supported on all platforms.
     cmd.arg0(command.argv0);
+    // sill: the folder first: `push_args` looks there for `cmd /c NAME.bat`.
+    cmd.current_dir(command.working_dir);
     // sill: platform-specific argument encoding (see `push_args`).
     commands::push_args(&mut cmd, &command.program, command.args)?;
-    cmd.current_dir(command.working_dir);
     // sill: without a console of the shell's own (sill creates an invisible one where
     // Windows allows; see crates/sill `console`), each console program would get a new
     // console with a window. Start it with a hidden one instead.

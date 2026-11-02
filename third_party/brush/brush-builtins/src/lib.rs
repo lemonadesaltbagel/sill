@@ -59,6 +59,8 @@ mod false_;
 mod fc;
 #[cfg(feature = "builtin.fg")]
 mod fg;
+// sill: disown.
+mod disown;
 #[cfg(feature = "builtin.getopts")]
 mod getopts;
 #[cfg(feature = "builtin.hash")]
@@ -91,6 +93,9 @@ mod procs;
 // sill: chmod on Windows (the read-only attribute); compiled everywhere for its tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod chmod_windows;
+// sill: which on Windows, from the shell's lookup.
+#[cfg(windows)]
+mod which_windows;
 // sill: lsof's file and port questions on Windows; compiled everywhere for its tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod lsof;

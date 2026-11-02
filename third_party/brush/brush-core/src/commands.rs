@@ -484,6 +484,24 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
             _ => self.shell.resolve_external_command(&self.command_name),
         };
 
+        // sill: `cmd | less` where no `less` is installed (Windows has none without Git):
+        // into a pipe or file a pager only copies, so it runs as the pager it would be
+        // there, sill's `cat` (see `execute_external_command`).
+        #[cfg(windows)]
+        let path = path.or_else(|| {
+            let tools = std::env::var_os("SILL_TOOLS_DIR")?;
+            let pager = matches!(
+                sill_winargs::needs_a_person(&self.command_name),
+                Some(sill_winargs::NeedsPerson::Pager)
+            ) && !self.command_name.contains(['/', '\\']);
+            let to_terminal = self
+                .params
+                .try_fd(&*self.shell, openfiles::OpenFiles::STDOUT_FD)
+                .is_some_and(|f| f.is_terminal());
+            (pager && !to_terminal && Path::new(&tools).join("cat.exe").is_file())
+                .then(|| Path::new(&tools).join(format!("{}.exe", self.command_name)))
+        });
+
         if let Some(path) = path {
             self.execute_via_external(&path)
         } else {
@@ -725,6 +743,18 @@ pub(crate) fn execute_external_command(
     let (executable_path, cmd_args) = {
         use std::io::Write as _;
         let stem = executable_path.file_stem().unwrap_or_default().to_string_lossy();
+        // Windows 11's own sudo, turned off (the default): it printed a hyperlink escape
+        // sequence and a pointer to the Settings app, nothing an agent can act on.
+        if stem.eq_ignore_ascii_case("sudo") && sys::job::is_disabled_windows_sudo(executable_path) {
+            let _ = writeln!(
+                context.stderr(),
+                "{}: Windows' sudo is turned off on this machine (Settings > System > For \
+                 developers), and elevation needs a person to approve it anyway; run the command \
+                 without sudo, or ask the user to run it from an Administrator terminal",
+                context.command_name
+            );
+            return Ok(ExecutionResult::general_error().into());
+        }
         match sill_winargs::needs_a_person(&stem) {
             Some(sill_winargs::NeedsPerson::Editor) if !child_stdin_is_terminal => {
                 let _ = writeln!(

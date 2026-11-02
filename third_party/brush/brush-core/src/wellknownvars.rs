@@ -64,9 +64,15 @@ pub(crate) fn init_well_known_vars(
 
     // BASH
     if let Some(shell_name) = shell.current_shell_name().map(|s| s.to_string()) {
+        // sill: the full path of the shell's executable, as bash's `$BASH` is, not `$0`:
+        // `bash -c '...' bash` (how the MCP server runs commands) made it `bash`.
+        let bash = std::env::current_exe().map_or_else(
+            |_| shell_name.clone(),
+            |exe| crate::sys::fs::display_path(&exe),
+        );
         shell
             .env_mut()
-            .set_global("BASH", ShellVariable::new(shell_name.clone()))?;
+            .set_global("BASH", ShellVariable::new(bash))?;
         // Initialize $_ to the shell name ($0), unless the shell inherited one: as
         // in bash, that one stays exported until $_ is next updated.
         if shell.env_str("_").is_none() {

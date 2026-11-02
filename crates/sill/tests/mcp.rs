@@ -142,6 +142,24 @@ fn functions_aliases_and_options_carry_over() {
 }
 
 #[test]
+fn errors_read_as_in_a_terminal() {
+    let mut c = Client::start(&workdir("errors"));
+    let r = c.bash("echo \"[$0]\"; nosuchcommand_xyz");
+    assert!(r.starts_with("[bash]\n"), "{r}");
+    assert!(r.contains("bash: line 1: nosuchcommand_xyz: command not found"), "{r}");
+    assert!(!r.contains("cmd.sh"), "{r}");
+}
+
+#[test]
+fn the_tools_listed_are_the_ones_here() {
+    let mut c = Client::start(&workdir("tools"));
+    let tools = c.request("tools/list", json!({}));
+    let bash = tools["tools"].as_array().unwrap().iter().find(|t| t["name"] == "bash").unwrap();
+    let text = bash["description"].as_str().unwrap();
+    assert!(text.contains("grep, sed, awk") && !text.contains("{tools}"), "{text}");
+}
+
+#[test]
 fn text_is_utf8_and_plain() {
     let mut c = Client::start(&workdir("text"));
     let r = c.bash("printf '\\033[1;31m中文 ✓\\033[0m\\r\\n'");

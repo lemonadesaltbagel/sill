@@ -1,0 +1,13 @@
+--- a/src/job.c	2026-11-02 21:44:00
++++ b/src/job.c	2026-11-02 21:44:00
+@@ -3473,7 +3473,9 @@
+        whichever happens first.  */
+     for (cp = shell; *cp != '\0'; ++cp)
+       {
+-        if (strchr (sh_chars, *cp) != 0)
++        /* sill: and blanks, so that a shell in a folder with a space in its name
++           ("C:/Users/Jane Doe/...") stays one word.  */
++        if (strchr (sh_chars, *cp) != 0 || ISBLANK (*cp))
+           *(ap++) = '\\';
+         *(ap++) = *cp;
+       }

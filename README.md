@@ -21,18 +21,20 @@ Measured on Windows with the Git Bash that ships with Git for Windows (and, for 
 
 ### Where Windows gets in the way, sill holds up
 
-**Conformance suite:** 85 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server. sill passes **85/85** both ways; Git Bash passes 64.
+**Conformance suite:** 96 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server, with sill installed in a folder whose name has a space. sill passes **96/96** both ways; Git Bash passes 70.
 
 | area | cases | sill | Git Bash |
 |---|---|---|---|
-| Encoding (non-English text through pipes, file names, git paths) | 7 | **7** | 2 |
+| Encoding (non-English text through pipes, file names, git paths, `$(...)` of legacy output) | 10 | **10** | 4 |
 | Arguments to native programs (`*`, quotes, `/` switches, `.bat`) | 13 | **13** | 10 |
-| Tools agents use (`rg`, `ps`, `pgrep`, `make`, `jq`, ...) | 11 | **11** | 9 |
+| Tools agents use (`rg`, `ps`, `pgrep`, `make`, `jq`, ...) | 15 | **15** | 12 |
+| Processes (background jobs, `kill`, `pkill`, `disown`) | 12 | **12** | 10 |
 | Line endings and bytes | 5 | **5** | 3 |
 | Size limits (long scripts, thousands of arguments) | 4 | **4** | 3 |
+| Running scripts (`#!`, `cmd /c NAME.bat`) | 6 | **6** | 5 |
 | Programs that prompt (`git commit` with no message, `vi`, pagers) | 4 | **4** | 1 |
 | Look-alikes (inputs sill's rules must leave alone) | 12 | **12** | 7 |
-| Paths, processes, files, scripts, errors | 29 | **29** | 29 |
+| Paths, files, errors | 15 | **15** | 15 |
 
 On a Chinese-locale laptop (code page 936), 0.4.0 passed the first 56 cases, Git Bash 39.
 

@@ -7,11 +7,17 @@
 //! prints). Ending a process ends its tree, as `kill` does on Windows (a `node` started
 //! through `npm.cmd` would otherwise keep running).
 //!
-//! Names and command lines match case-insensitively (`PING.EXE` is `ping`), and `-f` also
-//! matches the command line with its program path reduced to the name, as Linux's starts
-//! (`ping -n 3 x`, not `C:\Windows\system32\PING.EXE -n 3 x`). pkill and killall never end
-//! the shell's own ancestors (an agent's `pkill node` would end its harness) or Windows'
-//! session processes (explorer, dwm, csrss, ...).
+//! A pattern matches as procps' does, case-sensitively unless `-i`; a whole name matches
+//! in any case, since Windows names are (`PING.EXE` is `ping`). Case-insensitive patterns
+//! once let `pkill PING` end the user's SnippingTool. `-f` also matches the command line
+//! with its program path reduced to the name, as Linux's starts (`ping -n 3 x`, not
+//! `C:\Windows\system32\PING.EXE -n 3 x`).
+//!
+//! pkill and killall never end the shell's own ancestors (an agent's `pkill node` would end
+//! its harness) or Windows' session processes (explorer, dwm, csrss, ...). A process with
+//! a window open is someone's app: a pattern that only matches part of its name doesn't
+//! end it (its exact name or its PID does). Each process ended by a pattern is reported
+//! on stderr, so an unexpected one doesn't go unnoticed.
 //!
 //! `ps` supports the common forms: no options, `-e`/`-A`, `-f`, `aux`, `-p PID[,PID]`,
 //! `-o FIELD,...` (pid, ppid, user, comm, args/cmd/command). Columns the Windows snapshot
@@ -212,6 +218,8 @@ struct MatchQuery {
     list_name: bool,
     list_full: bool,
     count: bool,
+    /// pkill `-e`: print each process ended.
+    echo: bool,
     newest: bool,
     oldest: bool,
     signal: Option<i32>,
@@ -251,6 +259,7 @@ fn parse_match(cmd: &str, args: &[String]) -> Result<MatchQuery, String> {
                 break;
             }
             "-f" | "--full" => q.full = true,
+            "-e" | "--echo" if cmd == "pkill" => q.echo = true,
             "-x" | "--exact" | "-e" => q.exact = true,
             "-i" | "--ignore-case" | "-I" => q.ignore_case = true,
             "-l" | "--list-name" if cmd == "pgrep" => q.list_name = true,
@@ -320,8 +329,21 @@ fn short_cmdline(cmdline: &str) -> String {
     format!("{}{rest}", comm(base))
 }
 
-/// Names and command lines match case-insensitively: Windows names are (`PING.EXE` is
-/// `ping`).
+/// Whether `pat` names the process: its whole name, in any case (`ping` is `PING.EXE`).
+fn names(pat: &str, p: &Proc) -> bool {
+    let name = comm(&p.name);
+    name.eq_ignore_ascii_case(comm(pat))
+        || fancy_regex::RegexBuilder::new(&format!("^(?:{pat})$"))
+            .case_insensitive(true)
+            .build()
+            .is_ok_and(|re| re.is_match(name).unwrap_or(false))
+}
+
+/// Whether one of `q`'s patterns names the process (see [`names`]).
+fn named(q: &MatchQuery, p: &Proc) -> bool {
+    !q.full && q.patterns.iter().any(|pat| names(pat, p))
+}
+
 fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
     for pat in &q.patterns {
         let hit = if q.exact {
@@ -333,14 +355,16 @@ fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
             }
         } else {
             let re = fancy_regex::RegexBuilder::new(pat)
-                .case_insensitive(true)
+                .case_insensitive(q.ignore_case)
                 .build()
                 .map_err(|e| format!("{pat}: {e}"))?;
             if q.full {
+                let short = short_cmdline(&p.cmdline);
                 re.is_match(&p.cmdline).unwrap_or(false)
-                    || re.is_match(&short_cmdline(&p.cmdline)).unwrap_or(false)
+                    || re.is_match(&short).unwrap_or(false)
+                    || re.is_match(&lower_program(&short)).unwrap_or(false)
             } else {
-                re.is_match(comm(&p.name)).unwrap_or(false)
+                re.is_match(comm(&p.name)).unwrap_or(false) || names(pat, p)
             }
         };
         if hit {
@@ -348,6 +372,13 @@ fn matches(q: &MatchQuery, p: &Proc) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+/// A short command line with its program name in lower case (`PING -n 3` → `ping -n 3`),
+/// as the program would be named on Linux.
+fn lower_program(short: &str) -> String {
+    let i = short.find([' ', '\t']).unwrap_or(short.len());
+    format!("{}{}", short[..i].to_lowercase(), &short[i..])
 }
 
 /// Processes pkill and killall never end: Windows' own session processes (on Linux,
@@ -516,13 +547,36 @@ fn run_match<SE: brush_core::ShellExtensions>(
                 p.name
             )?;
         }
+        // Someone's app: a pattern that's only part of its name doesn't end it.
+        let windowed = win::pids_with_windows();
+        let (apps, sel): (Vec<&Proc>, Vec<&Proc>) = sel
+            .into_iter()
+            .partition(|p| !q.exact && !named(&q, p) && windowed.contains(&p.pid));
+        for p in &apps {
+            writeln!(
+                context.stderr(),
+                "{name}: not ending {} (pid {}): it has a window open and the pattern only matches part of it; name it exactly (pkill -x {}) or use kill {}",
+                p.name,
+                p.pid,
+                comm(&p.name),
+                p.pid
+            )?;
+        }
         for p in &sel {
-            if let Err(e) = win::end_tree(p.pid, code) {
+            // Ending a tree also ends its processes that matched (a bundled tool's own
+            // child); one already gone has nothing to say.
+            if let Err(e) = win::end_tree(p.pid, code)
+                && e != "No such process"
+            {
                 writeln!(
                     context.stderr(),
                     "{name}: killing pid {} failed: {e}",
                     p.pid
                 )?;
+            } else if q.echo {
+                writeln!(context.stdout(), "{} killed (pid {})", comm(&p.name), p.pid)?;
+            } else if !q.exact && !named(&q, p) {
+                writeln!(context.stderr(), "{name}: ended {} (pid {})", p.name, p.pid)?;
             }
         }
         if q.count {
@@ -734,6 +788,30 @@ mod win {
     pub(super) fn end_tree(pid: u32, code: u32) -> Result<(), &'static str> {
         crate::kill_windows::win::terminate_tree(i32::try_from(pid).map_err(|_| "bad pid")?, code)
     }
+
+    /// The processes with a visible top-level window on this desktop.
+    pub(super) fn pids_with_windows() -> std::collections::HashSet<u32> {
+        use windows_sys::Win32::Foundation::{HWND, LPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+        };
+        unsafe extern "system" fn add(hwnd: HWND, lp: LPARAM) -> i32 {
+            // SAFETY: `lp` is the set passed to EnumWindows below, alive for the call.
+            let set = unsafe { &mut *(lp as *mut std::collections::HashSet<u32>) };
+            let mut pid = 0u32;
+            // SAFETY: plain Win32 calls on a window handle EnumWindows gave us.
+            if unsafe { IsWindowVisible(hwnd) } != 0
+                && unsafe { GetWindowThreadProcessId(hwnd, &mut pid) } != 0
+            {
+                set.insert(pid);
+            }
+            1
+        }
+        let mut set = std::collections::HashSet::new();
+        // SAFETY: the callback only touches `set`, which outlives the call.
+        unsafe { EnumWindows(Some(add), (&raw mut set) as LPARAM) };
+        set
+    }
 }
 
 #[cfg(not(windows))]
@@ -744,6 +822,9 @@ mod win {
     }
     pub(super) const fn end_tree(_pid: u32, _code: u32) -> Result<(), &'static str> {
         Err("only on Windows")
+    }
+    pub(super) fn pids_with_windows() -> std::collections::HashSet<u32> {
+        std::collections::HashSet::new()
     }
 }
 
@@ -796,7 +877,10 @@ mod tests {
             Vec::<u32>::new(),
             "the shell itself is excluded"
         );
-        assert_eq!(sel("pgrep", "NODE"), vec![100], "case-insensitive");
+        assert_eq!(sel("pgrep", "NODE"), vec![100], "a whole name in any case");
+        assert_eq!(sel("pgrep", "OD"), Vec::<u32>::new(), "a pattern is case-sensitive");
+        assert_eq!(sel("pgrep", "-i OD"), vec![100, 400]);
+        assert_eq!(sel("pgrep", "-f ^code"), vec![400], "program name in lower case");
         assert_eq!(
             sel("pgrep", "-f ^node server.js"),
             vec![100],
@@ -843,6 +927,27 @@ mod tests {
             "PING -n 3 x"
         );
         assert_eq!(short_cmdline("node.exe server.js"), "node server.js");
+    }
+
+    #[test]
+    fn a_pattern_in_another_case_is_not_a_name() {
+        let p = |pid, name: &str| Proc {
+            pid,
+            ppid: 4,
+            name: name.into(),
+            cmdline: name.into(),
+            user: "u".into(),
+        };
+        let ps = vec![p(1, "PING.EXE"), p(2, "SnippingTool.exe")];
+        let q = parse_match("pkill", &a("PING")).unwrap();
+        let sel: Vec<_> = select(&q, &ps, 0).unwrap().iter().map(|p| p.pid).collect();
+        assert_eq!(sel, vec![1], "pkill PING once ended SnippingTool");
+        assert!(named(&q, &ps[0]));
+        let q = parse_match("pkill", &a("-i ping")).unwrap();
+        assert_eq!(select(&q, &ps, 0).unwrap().len(), 2);
+        assert!(!named(&q, &ps[1]), "a part of the name only");
+        assert!(named(&parse_match("pkill", &a("snippingtool")).unwrap(), &ps[1]));
+        assert!(parse_match("pkill", &a("-e x")).unwrap().echo);
     }
 
     #[test]

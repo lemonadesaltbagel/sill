@@ -54,22 +54,64 @@ const MAX_WAIT_MS: u64 = 60_000;
 const SHOWN_HEAD: usize = 8_000;
 const SHOWN_TAIL: usize = 22_000;
 
+/// The server's instructions; `{tools}` is what [`tools_here`] says.
 const INSTRUCTIONS: &str = "\
 This Windows machine has sill: native Bash for Windows (no WSL). Run shell commands with \
 sill's `bash` tool instead of PowerShell or cmd: Unix commands, scripts and Makefiles work \
-there as on Linux (grep, sed, awk, find, make, rg, jq, git, npm, python), and `apply_patch` \
+there as on Linux ({tools}), and `apply_patch` \
 edits files (patch on stdin or as an argument). `C:/x` and `/c/x` paths both work; there is \
 no sudo or apt; `msvc-env` loads Visual Studio's C/C++ tools. The working directory and \
 exported variables, functions, aliases and options carry over between calls. Start servers and \
 watchers with `run_in_background`, read them with `bash_output`, stop them with `bash_kill`.";
 
+/// The `bash` tool's description; `{tools}` is what [`tools_here`] says.
 const BASH_DESCRIPTION: &str = "\
-Run a command in Bash on this Windows machine (sill, native Bash: grep, sed, awk, find, make, \
-rg, jq, git, npm, python, apply_patch). Use it instead of PowerShell or cmd for shell work. \
+Run a command in Bash on this Windows machine (sill, native Bash: {tools}, apply_patch). Use it instead of PowerShell or cmd for shell work. \
 Returns stdout, stderr and the exit code. The working directory, exported variables, functions \
 and aliases carry over to the next call. Stopped after `timeout_ms` (default 120000, at most 600000) with every \
 program it started; for a server or anything long-running, set `run_in_background` to get a \
 job id at once.";
+
+/// Programs agents reach for that may or may not be installed.
+const OPTIONAL_TOOLS: &[&str] = &["git", "node", "npm", "python", "uv", "cargo", "go", "java", "dotnet", "docker"];
+
+/// The tools a command can use here: sill's own, then those of [`OPTIONAL_TOOLS`] on the
+/// PATH, and the rest named as missing, so a model doesn't reach for git on a machine
+/// without it.
+fn tools_here(on_path: impl Fn(&str) -> bool) -> String {
+    let (have, missing): (Vec<&str>, Vec<&str>) = OPTIONAL_TOOLS.iter().partition(|t| on_path(t));
+    let mut text = "grep, sed, awk, find, make, rg, jq".to_owned();
+    for t in have {
+        text.push_str(", ");
+        text.push_str(t);
+    }
+    if !missing.is_empty() {
+        text.push_str("; not installed: ");
+        text.push_str(&missing.join(", "));
+    }
+    text
+}
+
+/// Whether `name` is a program on the PATH (Windows: with an extension from PATHEXT;
+/// the Store's empty `python.exe` stand-in doesn't count).
+fn on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else { return false };
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned)
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    std::env::split_paths(&path).any(|dir| {
+        exts.iter().any(|ext| {
+            std::fs::metadata(dir.join(format!("{name}{ext}"))).is_ok_and(|m| m.is_file() && m.len() > 0)
+        })
+    })
+}
 
 /// Arguments of `bash`.
 #[derive(Deserialize, JsonSchema)]
@@ -118,6 +160,8 @@ struct Session {
     state: String,
     /// Whether the starting directory is settled (see `Server::settle_cwd`).
     cwd_settled: bool,
+    /// Said once, in the next result: why the commands don't run where the server started.
+    note: Option<String>,
 }
 
 struct Job {
@@ -142,6 +186,7 @@ pub struct Server {
     jobs: Arc<std::sync::Mutex<HashMap<u32, Job>>>,
     next: Arc<AtomicU32>,
     tool_router: ToolRouter<Self>,
+    instructions: String,
 }
 
 /// Runs the server on stdin and stdout until the client goes away, then exits.
@@ -187,16 +232,22 @@ impl Server {
         let root = std::env::var_os("SILL_MCP_ROOT").map(PathBuf::from).filter(|d| d.is_dir());
         let cwd_settled = root.is_some();
         let cwd = root.map_or_else(std::env::current_dir, Ok)?;
+        let tools = tools_here(on_path);
+        let mut tool_router = Self::tool_router();
+        if let Some(route) = tool_router.map.get_mut("bash") {
+            route.attr.description = Some(BASH_DESCRIPTION.replace("{tools}", &tools).into());
+        }
         let env = std::env::vars_os()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
             .collect();
         Ok(Self {
             shell,
             dir,
-            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, state: String::new(), cwd_settled })),
+            session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, state: String::new(), cwd_settled, note: None })),
             jobs: Arc::default(),
             next: Arc::new(AtomicU32::new(1)),
-            tool_router: Self::tool_router(),
+            tool_router,
+            instructions: INSTRUCTIONS.replace("{tools}", &tools),
         })
     }
 
@@ -272,7 +323,8 @@ impl Server {
             ),
             Ended::Cancelled => "cancelled; the command was stopped".into(),
         };
-        let mut text = report(&out, &err, &footer);
+        let mut text = session.note.take().unwrap_or_default();
+        text.push_str(&report(&out, &err, &footer));
         // Programs the command left running become a background job of the session.
         let left = if matches!(ended, Ended::Exited(_)) { tree.remaining() } else { 0 };
         if left > 0 {
@@ -386,12 +438,20 @@ impl Server {
         if is_no_projects_dir(&session.cwd)
             && let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
         {
-            session.cwd = PathBuf::from(home);
+            let home = PathBuf::from(home);
+            session.note = Some(format!(
+                "(sill: the client started this server in {}, which is no project's folder, so \
+                 commands start in {}; cd to the project, or set SILL_MCP_ROOT)\n",
+                display(&session.cwd),
+                display(&home)
+            ));
+            session.cwd = home;
         }
     }
 
     async fn start_job(&self, command: &str) -> std::io::Result<CallToolResult> {
-        let session = self.session.lock().await;
+        let mut session = self.session.lock().await;
+        let note = session.note.take().unwrap_or_default();
         let n = self.next.fetch_add(1, Ordering::Relaxed);
         let files = Files::new(&self.dir, n);
         std::fs::write(&files.cmd, command)?;
@@ -411,7 +471,7 @@ impl Server {
         };
         self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(n, job);
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "started background job {n} (pid {pid}) in {}; read its output with bash_output \
+            "{note}started background job {n} (pid {pid}) in {}; read its output with bash_output \
              (id {n}), stop it with bash_kill",
             display(&session.cwd)
         ))]))
@@ -429,7 +489,13 @@ impl Server {
         state: Option<&Path>,
     ) -> std::io::Result<(tokio::process::Child, tree::Tree)> {
         let mut cmd = tokio::process::Command::new(&self.shell);
-        cmd.arg("--noprofile").arg("--norc").arg(script);
+        // Run as `bash -c`, so errors read `bash: line 1: ...` as in a terminal, not with
+        // the path of the server's temporary script.
+        cmd.arg("--noprofile")
+            .arg("--norc")
+            .arg("-c")
+            .arg(format!(". {}", single_quote(&display(script))))
+            .arg("bash");
         cmd.current_dir(&session.cwd);
         cmd.env_clear();
         for (k, v) in &session.env {
@@ -460,7 +526,7 @@ impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("sill", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(self.instructions.clone())
     }
 }
 
@@ -562,20 +628,101 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
 }
 
 /// Whether `dir` is a client's or the system's own folder rather than a place for work: the
-/// Windows or Program Files folders, or one in Local AppData (where Claude Desktop and other
-/// per-user apps install), except the temporary folder, which is there too.
+/// Windows or Program Files folders, a drive's root, or the folder of the program that
+/// started the server (Claude Desktop starts servers in its own install folder). Local
+/// AppData as a whole once counted too, which moved a Claude workspace kept there to the
+/// home folder.
 fn is_no_projects_dir(dir: &Path) -> bool {
+    is_no_projects_dir_with(dir, &client_dirs())
+}
+
+fn is_no_projects_dir_with(dir: &Path, client_dirs: &[PathBuf]) -> bool {
     let var = |v: &str| std::env::var_os(v).map(|p| comparable(Path::new(&p)));
     let under = |dir: &str, p: &str| !p.is_empty() && (dir == p || dir.starts_with(&format!("{p}/")));
     let dir = comparable(dir);
-    let system = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+    let system = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)"]
         .iter()
         .filter_map(|v| var(v))
         .any(|p| under(&dir, &p));
+    let client = client_dirs.iter().map(|p| comparable(p)).any(|p| under(&dir, &p));
     let temp = ["TEMP", "TMP"].iter().filter_map(|v| var(v)).any(|p| under(&dir, &p));
     // A root (`/`, or `c:` on Windows) is no project's either.
     let root = dir == "/" || (dir.len() == 2 && dir.ends_with(':'));
-    (system && !temp) || root
+    ((system || client) && !temp) || root
+}
+
+/// The install folders of the programs that started the server (its parent and theirs, a
+/// few levels up): each one's folder, or for a Squirrel install (`...\AnthropicClaude\
+/// app-1.2.3\claude.exe`) the folder above its versioned one.
+fn client_dirs() -> Vec<PathBuf> {
+    client_dirs_of(ancestor_exes())
+}
+
+fn client_dirs_of(exes: Vec<PathBuf>) -> Vec<PathBuf> {
+    exes.into_iter()
+        .filter_map(|exe| {
+            let dir = exe.parent()?;
+            let versioned = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("app-"));
+            Some(if versioned { dir.parent().unwrap_or(dir) } else { dir }.to_path_buf())
+        })
+        .collect()
+}
+
+/// The executables of the server's parent process and its ancestors (up to four).
+#[cfg(windows)]
+fn ancestor_exes() -> Vec<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+    let mut parents = HashMap::new();
+    // SAFETY: a snapshot walked with a correctly sized entry, then closed.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return vec![];
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(0);
+        let mut ok = Process32FirstW(snap, &mut e);
+        while ok != 0 {
+            parents.insert(e.th32ProcessID, e.th32ParentProcessID);
+            ok = Process32NextW(snap, &mut e);
+        }
+        CloseHandle(snap);
+    }
+    let mut out = vec![];
+    let mut pid = std::process::id();
+    for _ in 0..4 {
+        let Some(&parent) = parents.get(&pid) else { break };
+        if parent == 0 || parent == pid {
+            break;
+        }
+        // SAFETY: the handle is checked and closed; the buffer's size is passed in.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, parent);
+            if !h.is_null() {
+                let mut buf = vec![0u16; 32768];
+                let mut len = u32::try_from(buf.len()).unwrap_or(0);
+                if QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) != 0 {
+                    buf.truncate(len as usize);
+                    out.push(PathBuf::from(std::ffi::OsString::from_wide(&buf)));
+                }
+                CloseHandle(h);
+            }
+        }
+        pid = parent;
+    }
+    out
+}
+
+#[cfg(not(windows))]
+const fn ancestor_exes() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// A path to compare with another: its long form where it exists (`RUNNER~1` is
@@ -603,64 +750,11 @@ fn parse_env(bytes: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// A stream's bytes as text, line by line: UTF-8, or, for a line that isn't valid UTF-8
-/// (and holds no NUL, so isn't binary), the system's ANSI code page if that reads it
-/// cleanly. Some programs write that code page into a pipe whatever the console's is:
-/// Java since JEP 400 (GBK on Chinese Windows), some MSVC tools.
+/// A stream's bytes as text, line by line: UTF-8, or the system's ANSI code page for a
+/// line that isn't. Some programs write that code page into a pipe whatever the
+/// console's is: Java since JEP 400 (GBK on Chinese Windows), some MSVC tools.
 fn decode(bytes: &[u8]) -> String {
-    decode_with(bytes, system_ansi_code_page())
-}
-
-fn decode_with(bytes: &[u8], ansi: Option<u32>) -> String {
-    let mut text = String::with_capacity(bytes.len());
-    for line in bytes.split_inclusive(|&b| b == b'\n') {
-        match std::str::from_utf8(line) {
-            Ok(s) => text.push_str(s),
-            Err(_) => match ansi.filter(|_| !line.contains(&0)).and_then(|cp| from_code_page(line, cp)) {
-                Some(s) => text.push_str(&s),
-                None => text.push_str(&String::from_utf8_lossy(line)),
-            },
-        }
-    }
-    text
-}
-
-/// The ANSI code page, unless it's UTF-8 already (or there's none).
-#[cfg(windows)]
-fn system_ansi_code_page() -> Option<u32> {
-    // SAFETY: plain Win32 call.
-    let acp = unsafe { windows_sys::Win32::Globalization::GetACP() };
-    (acp != 65001).then_some(acp)
-}
-
-#[cfg(not(windows))]
-const fn system_ansi_code_page() -> Option<u32> {
-    None
-}
-
-/// `bytes` decoded in code page `cp`, if every byte sequence is valid there.
-#[cfg(windows)]
-fn from_code_page(bytes: &[u8], cp: u32) -> Option<String> {
-    use windows_sys::Win32::Globalization::{MB_ERR_INVALID_CHARS, MultiByteToWideChar};
-    let len = i32::try_from(bytes.len()).ok()?;
-    // SAFETY: sizing call with valid input.
-    let n = unsafe {
-        MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, std::ptr::null_mut(), 0)
-    };
-    if n <= 0 {
-        return None;
-    }
-    let mut wide = vec![0u16; usize::try_from(n).ok()?];
-    // SAFETY: the buffer holds the `n` units the sizing call asked for.
-    let m = unsafe {
-        MultiByteToWideChar(cp, MB_ERR_INVALID_CHARS, bytes.as_ptr(), len, wide.as_mut_ptr(), n)
-    };
-    (m == n).then(|| String::from_utf16_lossy(&wide))
-}
-
-#[cfg(not(windows))]
-const fn from_code_page(_bytes: &[u8], _cp: u32) -> Option<String> {
-    None
+    brush_core::text::decode_output(bytes)
 }
 
 /// A stream's text for a result: UTF-8 (invalid bytes replaced), CRLF as LF, no ANSI
@@ -917,31 +1011,42 @@ mod tests {
     }
 
     #[test]
-    fn decoding_falls_back_line_by_line() {
-        // Without an ANSI code page, invalid UTF-8 is replaced.
-        assert_eq!(decode_with(b"ok\n\xff\n", None), "ok\n\u{fffd}\n");
-        assert_eq!(decode_with("中文\n".as_bytes(), Some(936)), "中文\n");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn gbk_lines_read_as_gbk() {
-        // 中文 in GBK, after a UTF-8 line, and a binary line left alone.
-        let bytes = b"\xe2\x9c\x93 utf8\n\xd6\xd0\xce\xc4\n\x00\xd6\n";
-        assert_eq!(decode_with(bytes, Some(936)), "\u{2713} utf8\n中文\n\0\u{fffd}\n");
-    }
-
-    #[test]
     fn the_temporary_folder_is_a_place_for_work() {
         assert!(!is_no_projects_dir(&std::env::temp_dir()));
         assert!(!is_no_projects_dir(&std::env::temp_dir().join("project")));
         assert!(is_no_projects_dir(Path::new("/")));
         #[cfg(windows)]
-        for v in ["SystemRoot", "LOCALAPPDATA"] {
-            let p = PathBuf::from(std::env::var_os(v).unwrap());
-            assert!(is_no_projects_dir(&p), "{v}");
-            assert!(is_no_projects_dir(&p.join("AnthropicClaude")), "{v}");
+        {
+            let windows = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+            assert!(is_no_projects_dir(&windows));
+            assert!(is_no_projects_dir(&windows.join("System32")));
         }
+    }
+
+    #[test]
+    fn the_client_folder_is_no_project() {
+        // Paths that don't exist compare as given.
+        let clients = client_dirs_of(vec![
+            PathBuf::from("/fake/AppData/Local/AnthropicClaude/app-1.2.3/claude.exe"),
+            PathBuf::from("/fake/tools/editor/editor.exe"),
+        ]);
+        let no_project = |d: &str| is_no_projects_dir_with(Path::new(d), &clients);
+        assert!(no_project("/fake/AppData/Local/AnthropicClaude"), "above a Squirrel app-* folder");
+        assert!(no_project("/fake/AppData/Local/AnthropicClaude/app-1.2.3"));
+        assert!(no_project("/fake/tools/editor"));
+        assert!(!no_project("/fake/AppData/Local/Claude-Data/workspace"), "a workspace in Local AppData");
+        assert!(!no_project("/fake/tools"));
+    }
+
+    #[test]
+    fn the_tools_named_are_the_ones_here() {
+        let text = tools_here(|t| t == "git" || t == "node");
+        assert_eq!(
+            text,
+            "grep, sed, awk, find, make, rg, jq, git, node; not installed: npm, python, uv, cargo, go, java, dotnet, docker"
+        );
+        assert!(!BASH_DESCRIPTION.replace("{tools}", &text).contains("{tools}"));
+        assert!(INSTRUCTIONS.contains("{tools}"));
     }
 
     #[test]

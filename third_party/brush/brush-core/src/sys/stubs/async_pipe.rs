@@ -14,15 +14,17 @@ impl AsyncPipeReader {
         Ok(Self { inner: Some(fd) })
     }
 
+    /// Reads to the end; output that isn't UTF-8 is decoded, not an error
+    /// ([`crate::text::decode_output`]).
     pub(crate) async fn read_to_string(&mut self) -> io::Result<String> {
         let Some(reader) = self.inner.take() else {
             return Ok(String::new());
         };
 
         tokio::task::spawn_blocking(move || {
-            let mut s = String::new();
-            { reader }.read_to_string(&mut s)?;
-            Ok(s)
+            let mut bytes = Vec::new();
+            { reader }.read_to_end(&mut bytes)?;
+            Ok(crate::text::decode_output(&bytes))
         })
         .await
         .map_err(io::Error::other)?

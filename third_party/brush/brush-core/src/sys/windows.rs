@@ -12,7 +12,8 @@ pub(crate) mod signal_names;
 pub(crate) mod psub;
 /// sill: `read -t`.
 pub mod poll;
-pub use crate::sys::stubs::resource;
+/// sill: CPU times for `time` and `times`.
+pub mod resource;
 
 /// Signal processing utilities
 pub mod signal {
