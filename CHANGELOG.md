@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 (2026-11-02)
 
 Fixes from a run of 0.6.0 on a Chinese-locale Windows 11 (code page 936), with a space in the user name and no Git, Node or Python.
 

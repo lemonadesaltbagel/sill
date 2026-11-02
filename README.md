@@ -36,7 +36,7 @@ Measured on Windows with the Git Bash that ships with Git for Windows (and, for 
 | Look-alikes (inputs sill's rules must leave alone) | 12 | **12** | 7 |
 | Paths, files, errors | 15 | **15** | 15 |
 
-On a Chinese-locale laptop (code page 936), 0.4.0 passed the first 56 cases, Git Bash 39.
+In a Chinese-locale Windows container (code page 936, no Git on the machine), sill passes **94/94** of the cases that apply there, also with a windowless console; Git Bash passes 65.
 
 **Real agents, fewer failed commands:** 18 tasks with automatic checks (a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, an MSVC build), DeepSeek's low-cost model, two runs per task on the Chinese-locale laptop:
 
