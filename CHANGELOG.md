@@ -12,6 +12,8 @@ Fixes from a run of 0.6.0 on a Chinese-locale Windows 11 (code page 936), with a
 - **`cmd /c build.bat` said "'build.bat' is not recognized"** when the harness set `NoDefaultCurrentDirectoryInExePath` (Claude Code does). A bare `NAME.bat`/`NAME.cmd` that's in the current folder is passed as `.\NAME.bat`; names without an extension still go through the PATH.
 - **`disown`** said "not implemented" (status 99). It removes jobs from the table (`-a`, `-r`, `%N`, a PID); a background job already outlives the shell.
 - **A background job left running at exit with the shell's output as its own** (`bash -c 'server &'`) kept the caller waiting for the output to close, with no sign why (bash does the same). sill says so on stderr, with the redirection that avoids it.
+- **`cmd | less` without Git** said "less: command not found" (Windows has no `less`): into a pipe or file a missing `more`/`less` runs as `cat`, as an installed one already did.
+- **`$BASH`** was `$0` (`bash` under the MCP server); it's the shell's full path, as in bash.
 - **`which python`** named the Store's stand-in `python.exe` while `python` said "command not found". `which` is a builtin on Windows, from the shell's own lookup.
 - **`seq ... | head`** printed "write error: Broken pipe": Windows has no SIGPIPE to end the writer quietly. The bundled tools don't print it.
 - **Windows' own `sudo`, turned off,** printed an escape sequence and a pointer to Settings; sill says sudo is off and elevation needs a person.
@@ -23,7 +25,7 @@ Fixes from a run of 0.6.0 on a Chinese-locale Windows 11 (code page 936), with a
 - **Errors read `bash: line 1: ...`**, not with the path of the server's temporary script.
 
 ### Checks
-- **Conformance runs sill from a folder with a space in its name, and a second time with a windowless console**; new cases for bytes in `$(...)` and `read`, `cmd /c NAME.bat`, `disown`, `pkill` beside an app whose name contains the pattern, make recipes, `which`, `seq | head` and `time`.
+- **Conformance runs sill from a folder with a space in its name, a second time with a windowless console, and in the Chinese-locale container**; new cases for bytes in `$(...)` and `read`, `cmd /c NAME.bat`, `disown`, `pkill` beside an app whose name contains the pattern, make recipes, `which`, `seq | head` and `time`.
 
 ### Docs
 - **Results:** Windows-boundary tasks (`winbench`), on GitHub's runner and on a Chinese-locale Windows: every shell solves them; sill takes the fewest turns.

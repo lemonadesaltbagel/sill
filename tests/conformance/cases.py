@@ -338,9 +338,10 @@ CASES = [
      "script": "ping -n 2 127.0.0.1 >/dev/null 2>&1 & disown; echo rc=$?; jobs > j.txt; wc -l < j.txt",
      "check": lambda o, e, c, s: text(o).split() == ["rc=0", "0"]},
     {"id": "proc-pkill-pattern-case", "cat": "process",
-     "why": "`pkill PING` matches as on Linux (case-sensitive): it doesn't end an app whose name merely contains `ping`.",
+     "why": "`pkill` patterns match as on Linux (case-sensitive): `pkill PING` didn't spare the user's SnippingTool. "
+            "(The pattern here, PPINGD, is one only the decoy's name holds in another case.)",
      "script": "cp \"$BASH\" ./SnippingDecoy.exe 2>/dev/null; (./SnippingDecoy.exe -c 'sleep 20' >/dev/null 2>&1 &); "
-               "sleep 2; pkill PING; echo \"rc=$?\"; pgrep -x SnippingDecoy >/dev/null && echo alive; pkill -x SnippingDecoy",
+               "sleep 2; pkill PPINGD; echo \"rc=$?\"; pgrep -x SnippingDecoy >/dev/null && echo alive; pkill -x SnippingDecoy",
      "expect": "rc=1\nalive\n", "after_no_process": "SnippingDecoy"},
     {"id": "proc-bg-holds-output-note", "cat": "process", "direct_only": True,
      "why": "A background job left running with the shell's output as its own is named on stderr, so a "

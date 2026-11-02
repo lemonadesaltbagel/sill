@@ -484,6 +484,24 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
             _ => self.shell.resolve_external_command(&self.command_name),
         };
 
+        // sill: `cmd | less` where no `less` is installed (Windows has none without Git):
+        // into a pipe or file a pager only copies, so it runs as the pager it would be
+        // there, sill's `cat` (see `execute_external_command`).
+        #[cfg(windows)]
+        let path = path.or_else(|| {
+            let tools = std::env::var_os("SILL_TOOLS_DIR")?;
+            let pager = matches!(
+                sill_winargs::needs_a_person(&self.command_name),
+                Some(sill_winargs::NeedsPerson::Pager)
+            ) && !self.command_name.contains(['/', '\\']);
+            let to_terminal = self
+                .params
+                .try_fd(&*self.shell, openfiles::OpenFiles::STDOUT_FD)
+                .is_some_and(|f| f.is_terminal());
+            (pager && !to_terminal && Path::new(&tools).join("cat.exe").is_file())
+                .then(|| Path::new(&tools).join(format!("{}.exe", self.command_name)))
+        });
+
         if let Some(path) = path {
             self.execute_via_external(&path)
         } else {
