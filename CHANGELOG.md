@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-11-02)
 
 ### Docs
 - **Results** lead with where Windows gets in the way (conformance 85/85 against Git Bash's 64; fewer failed commands for real agents; the MCP server for PowerShell harnesses) and show that on general coding benchmarks (Terminal-Bench 2.1, SWE-bench Verified) sill solves as many tasks as Git Bash and PowerShell, with fewer failed shell calls.
 
-### Fixes (from a code review)
+### Fixes
 - **A command given as a path that doesn't exist** (`./venv/bin/python`) said "command not found"; it says "No such file or directory", as bash does.
 - **`python /d/work/solve.py`** opened `D:\\d\\work\\solve.py`: a `/c/...` path reached native programs as written. Now a whole argument in that form that names something existing is passed as its Windows path, as Git Bash would; switches (`/c`, `/s`), a bare drive, paths that don't exist and `--opt=/c/...` are left alone (look-alike cases check each).
 - **`chmod` was missing** (`chmod +x build.sh && ./build.sh` failed with "command not found" without Git's tools on PATH, and Git's MSYS `chmod` reads `/tmp` as its own folder). It's a builtin now: a mode with the owner's write permission makes a file writable, one without makes it read-only; execute bits succeed and change nothing (Windows runs programs by extension; sill runs `#!` scripts as they are).
@@ -26,9 +26,10 @@
 - **`more` and `less` writing to a pipe or file** are `cat` (Windows' `more` waited for a key).
 
 ### Process start
-- **Starting a program resumes it with one call** (`NtResumeProcess`) instead of a snapshot of every thread on the machine.
+- **Starting a program resumes it with one call** (`NtResumeProcess`) instead of a snapshot of every thread on the machine: about 17 ms per program on GitHub's runner, from 30 (more where many threads run, as on a developer's machine).
 
 ### Checks
+- **Benchmarks on native Windows** (workflows in sill-bash-tests): Terminal-Bench 2.1 and SWE-bench Verified, limited to the tasks that work on Windows (each task's reference solution passes there), and Windows-boundary tasks; each run records why it ended, runs that say nothing about the shell (API errors, a task that didn't set up, an agent that looked up the answer) aren't counted, and an interrupted run resumes.
 - **Conformance:** Windows file-system cases (paths past 260 characters, files another program holds open, junctions, read-only files and git's objects, case-only renames, symlinks), programs that prompt, and look-alikes (inputs that resemble what a sill rule acts on, which it must leave alone).
 
 ## 0.5.0 (2026-10-27)
