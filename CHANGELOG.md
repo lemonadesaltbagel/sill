@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Docs
+- **Results:** Windows-boundary tasks (`winbench`), on GitHub's runner and on a Chinese-locale Windows: every shell solves them; sill takes the fewest turns.
+
 ## 0.6.0 (2026-11-02)
 
 ### Docs

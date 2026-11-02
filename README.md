@@ -75,6 +75,17 @@ Run without a model, the tasks' reference solutions (correct bash scripts) pass 
 | tasks solved | 38/43 | 35/43 | 38/43 |
 | failed shell calls | **20 of 568 (4%)** | 29 of 613 (5%) | 75 of 409 (18%) |
 
+**Windows-boundary tasks** ([`winbench`](https://github.com/lemonadesaltbagel/sill-bash-tests)): 17 longer tasks where Windows gets in the way (MSVC and .NET builds, `.bat` and PowerShell scripts, a server to start and stop, a port or a file held by another process, GBK and UTF-8-BOM data, a CRLF merge, Unix-looking arguments such as API routes and Azure resource IDs), three runs each, on GitHub's runner and on a Chinese-locale Windows (code page 936):
+
+| | sill | Git Bash | PowerShell |
+|---|---|---|---|
+| tasks solved, en-US | 51/51 | 51/51 | 51/51 |
+| tasks solved, zh-CN | **45/45** | **45/45** | 42/45 |
+| turns, en-US / zh-CN | **431** / **375** | 509 / 384 | 471 / 404 |
+| failed shell calls, en-US / zh-CN | 7% / **3%** | 9% / 4% | 7% / 7% |
+
+Run without a model, the tasks' reference solutions pass in sill 17 of 17, in Git Bash 12: Git Bash rewrites `/api/v2/orders` or `/subscriptions/...` into `C:/Program Files/Git/...` before a program sees it, and its `kill` leaves a server running. Agents know these and work around them, at the cost of extra commands.
+
 Runs that say nothing about the shell aren't counted: where the model's API failed, a task's environment didn't build, or the agent looked up the task's tests or solution (on the machine or online). The runner reruns just those.
 
 **Bash itself:** brush's compatibility suite, with Git Bash as the reference, passes 2,435 of 2,933 runnable cases on Windows (83%). The rest are mostly Unix signals and job control (Windows has no equivalent), `coproc`, debugging options (`extdebug`, `functrace`), rarely used `declare` forms, and Git Bash's own differences, such as its `/usr/bin` paths.
