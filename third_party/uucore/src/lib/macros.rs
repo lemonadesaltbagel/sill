@@ -93,7 +93,11 @@ macro_rules! show(
 
         let e = $err;
         $crate::error::set_exit_code(e.code());
-        let _ = writeln!(std::io::stderr(), "{}: {e}", $crate::util_name());
+        // sill: see `quiet_broken_pipe`.
+        let text = e.to_string();
+        if !$crate::quiet_broken_pipe(&text) {
+            let _ = writeln!(std::io::stderr(), "{}: {text}", $crate::util_name());
+        }
     })
 );
 
@@ -154,12 +158,11 @@ macro_rules! show_if_err(
 macro_rules! show_error(
     ($($args:tt)+) => ({
 		use std::io::Write as _;
-        let _ = writeln!(
-            std::io::stderr(),
-            "{}: {}",
-            $crate::util_name(),
-            format_args!($($args)+)
-        );
+        // sill: see `quiet_broken_pipe`.
+        let text = format!($($args)+);
+        if !$crate::quiet_broken_pipe(&text) {
+            let _ = writeln!(std::io::stderr(), "{}: {text}", $crate::util_name());
+        }
     })
 );
 

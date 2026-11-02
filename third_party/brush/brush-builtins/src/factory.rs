@@ -187,6 +187,9 @@ pub fn default_builtins<SE: brush_core::ShellExtensions>(
     // sill: Windows has no chmod; see chmod_windows.rs.
     #[cfg(windows)]
     m.insert("chmod".into(), builtins::Registration::of::<chmod_windows::ChmodCommand>());
+    // sill: `which` from the shell's own lookup; see which_windows.rs.
+    #[cfg(windows)]
+    m.insert("which".into(), builtins::Registration::of::<which_windows::WhichCommand>());
     // sill: which process holds a file or a port; see lsof.rs.
     #[cfg(windows)]
     m.insert("lsof".into(), builtins::Registration::of::<lsof::LsofCommand>());
@@ -377,10 +380,10 @@ pub fn default_builtins<SE: brush_core::ShellExtensions>(
             builtins::Registration::of::<caller::CallerCommand>(),
         );
 
-        // TODO(disown): implement disown builtin
+        // sill: disown (it was unimplemented).
         m.insert(
             "disown".into(),
-            builtins::Registration::of::<unimp::UnimplementedCommand>(),
+            builtins::Registration::of::<disown::DisownCommand>(),
         );
 
         // TODO(logout): implement logout builtin

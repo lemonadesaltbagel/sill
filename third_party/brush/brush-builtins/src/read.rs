@@ -369,8 +369,20 @@ impl InputReader {
                         }
                         return Err(e.into_io_error().into());
                     }
-                    self.pending
-                        .extend(e.as_bytes().iter().copied().map(char::from));
+                    // sill: in the ANSI code page if that reads them (a GBK file on a
+                    // Chinese system), taking a two-byte character's second byte from
+                    // the input when it's still there.
+                    let bytes = e.as_bytes().to_vec();
+                    let input = &mut self.input;
+                    let chars = brush_core::text::decode_stray_bytes(
+                        &bytes,
+                        brush_core::text::system_ansi_code_page(),
+                        || {
+                            let mut b = [0u8];
+                            matches!(std::io::Read::read(input, &mut b), Ok(1)).then_some(b[0])
+                        },
+                    );
+                    self.pending.extend(chars);
                 }
             }
         };

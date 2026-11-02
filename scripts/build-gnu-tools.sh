@@ -22,7 +22,7 @@ cc=$host-gcc
 # GCC 14 made incompatible pointer types an error; diffutils' sdiff.c trips it.
 cflags="-O2 -Wno-error=incompatible-pointer-types"
 
-build() { # name version sha256 "configure args" outputs...   (TARBALL_EXT, EXTRA_CFLAGS)
+build() { # name version sha256 "configure args" outputs...   (TARBALL_EXT, EXTRA_CFLAGS, PATCHES)
     local name=$1 version=$2 sha=$3 extra=$4
     shift 4
     local tarball="$name-$version.${TARBALL_EXT:-tar.xz}"
@@ -31,6 +31,9 @@ build() { # name version sha256 "configure args" outputs...   (TARBALL_EXT, EXTR
     tar -xf "$work/$tarball" -C "$work"
     (
         cd "$work/$name-$version"
+        for p in ${PATCHES:-}; do
+            patch -p1 -s < "$here/third_party/gnu-tools/$p"
+        done
         # shellcheck disable=SC2086 # $extra is a list of configure arguments
         ./configure -q --host="$host" --disable-nls --enable-threads=windows $extra \
             CFLAGS="$cflags ${EXTRA_CFLAGS:-}" LDFLAGS="-static -Wl,--wrap=main" LIBS="$work/shim.o $work/utf8.o -lbcrypt" >/dev/null
@@ -51,7 +54,9 @@ build diffutils 3.12 7c8b7f9fc8609141fdea9cece85249d308624391ff61dedaf528fcb3377
     "gl_cv_func_strcasecmp_works=yes" src/diff.exe src/cmp.exe src/diff3.exe src/sdiff.exe
 # GNU make: Unix Makefiles are common in repos and Windows has no make. On Windows it runs
 # recipes with the sh.exe on PATH, which in the package is sill. make 4.4.1's K&R-style
-# declarations need pre-C23 (GCC 15 defaults to C23); it ships no .tar.xz.
-TARBALL_EXT=tar.gz EXTRA_CFLAGS=-std=gnu17 \
+# declarations need pre-C23 (GCC 15 defaults to C23); it ships no .tar.xz. The patch keeps
+# a shell path with a space in it (sill under C:/Users/Jane Doe/...) one word: make split
+# it, and every recipe failed with "CreateProcess(C:/Users/Jane, ...) failed" (e=193).
+TARBALL_EXT=tar.gz EXTRA_CFLAGS=-std=gnu17 PATCHES=make-shell-with-spaces.patch \
 build make 4.4.1 dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3 \
     "" make.exe

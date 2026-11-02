@@ -725,6 +725,18 @@ pub(crate) fn execute_external_command(
     let (executable_path, cmd_args) = {
         use std::io::Write as _;
         let stem = executable_path.file_stem().unwrap_or_default().to_string_lossy();
+        // Windows 11's own sudo, turned off (the default): it printed a hyperlink escape
+        // sequence and a pointer to the Settings app, nothing an agent can act on.
+        if stem.eq_ignore_ascii_case("sudo") && sys::job::is_disabled_windows_sudo(executable_path) {
+            let _ = writeln!(
+                context.stderr(),
+                "{}: Windows' sudo is turned off on this machine (Settings > System > For \
+                 developers), and elevation needs a person to approve it anyway; run the command \
+                 without sudo, or ask the user to run it from an Administrator terminal",
+                context.command_name
+            );
+            return Ok(ExecutionResult::general_error().into());
+        }
         match sill_winargs::needs_a_person(&stem) {
             Some(sill_winargs::NeedsPerson::Editor) if !child_stdin_is_terminal => {
                 let _ = writeln!(

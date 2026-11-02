@@ -207,6 +207,15 @@ pub fn get_canonical_util_name(util_name: &str) -> &str {
     }
 }
 
+/// sill: whether an error message is only that the reader of standard output went away
+/// (`seq 1 1000000 | head -1`), which on Windows goes unsaid. On Linux, SIGPIPE ends the
+/// writer before it can say anything; Windows has no SIGPIPE, so the write fails and
+/// utilities printed "write error: Broken pipe" after every such pipeline.
+#[doc(hidden)]
+pub fn quiet_broken_pipe(message: &str) -> bool {
+    cfg!(windows) && message.trim_end().ends_with("Broken pipe")
+}
+
 #[macro_export]
 macro_rules! bin_inner {
     ($util:ident, $post:expr) => {

@@ -104,8 +104,8 @@ fn trace_invocation() {
 /// console programs (cmd, PowerShell 5.1, MSVC, ipconfig, ...) write in the console's code
 /// page: with the OEM default, their text in any non-ASCII language reached the model as
 /// mojibake, and characters outside the code page were lost as `?`. Under 65001 Windows'
-/// own messages also come out in English. Only a console sill created is changed, never
-/// one it was given. Batch files are then read as UTF-8 too: ones saved in the old local
+/// own messages also come out in English. Only a console sill created, or a windowless one
+/// it was started with alone (`CREATE_NO_WINDOW`), is changed, never a terminal. Batch files are then read as UTF-8 too: ones saved in the old local
 /// code page with non-ASCII text misread, so `SILL_CONSOLE_CP=<code page>` (e.g. 936)
 /// sets another one.
 #[cfg(windows)]
@@ -153,6 +153,9 @@ mod console {
     pub(crate) fn ensure_invisible() -> bool {
         // SAFETY: plain Win32 call; GetConsoleCP returns 0 when there's no console.
         if unsafe { GetConsoleCP() } != 0 {
+            if own_hidden_console() {
+                set_code_page();
+            }
             return false;
         }
         // A new or attached console becomes the standard handles that weren't redirected;
@@ -170,17 +173,40 @@ mod console {
             unsafe { SetStdHandle(id, handle) };
         }
         if ok {
-            let cp = std::env::var("SILL_CONSOLE_CP")
-                .ok()
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .unwrap_or(65001);
-            // SAFETY: plain Win32 calls on the console just created.
-            unsafe {
-                SetConsoleOutputCP(cp);
-                SetConsoleCP(cp);
-            }
+            set_code_page();
         }
         ok
+    }
+
+    /// Whether sill was started with a console of its own that has no window: what a
+    /// harness's `CREATE_NO_WINDOW` gives it (Node's `windowsHide`, Python's
+    /// `CREATE_NO_WINDOW`). That console is as much sill's as one it creates; it got the
+    /// system's OEM code page (936 on a Chinese system), so console programs' text reached
+    /// the harness in GBK. A console with a window, or a pseudoconsole (Windows Terminal,
+    /// VS Code), or one shared with the process that started sill, is someone's terminal.
+    fn own_hidden_console() -> bool {
+        use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+        // SAFETY: plain Win32 calls; the list holds as many entries as it's given room for.
+        unsafe {
+            if !GetConsoleWindow().is_null() {
+                return false;
+            }
+            let mut pids = [0u32; 4];
+            GetConsoleProcessList(pids.as_mut_ptr(), 4) == 1 && pids[0] == std::process::id()
+        }
+    }
+
+    /// Sets the console's code pages: UTF-8, or `SILL_CONSOLE_CP`.
+    fn set_code_page() {
+        let cp = std::env::var("SILL_CONSOLE_CP")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(65001);
+        // SAFETY: plain Win32 calls on sill's own console.
+        unsafe {
+            SetConsoleOutputCP(cp);
+            SetConsoleCP(cp);
+        }
     }
 
     /// Windows 11 24H2 and later: `AllocConsoleWithOptions(NO_WINDOW)`.

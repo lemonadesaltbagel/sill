@@ -27,6 +27,7 @@ pub use stub::*;
 mod imp {
     use std::collections::HashMap;
     use std::os::windows::io::RawHandle;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -97,6 +98,10 @@ mod imp {
 
         /// How many processes in the job are still running.
         pub fn active_processes(&self) -> u32 {
+            self.accounting().map_or(0, |info| info.ActiveProcesses)
+        }
+
+        fn accounting(&self) -> Option<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION> {
             // SAFETY: a zeroed accounting structure is valid to fill.
             let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
             // SAFETY: a valid job handle; `info` is the structure the class names.
@@ -109,7 +114,17 @@ mod imp {
                     std::ptr::null_mut(),
                 )
             } != 0;
-            if ok { info.ActiveProcesses } else { 0 }
+            ok.then_some(info)
+        }
+
+        /// Adds the CPU time of the job's processes so far to [`children_times`].
+        fn account(&self) {
+            if let Some(info) = self.accounting() {
+                let user = u64::try_from(info.TotalUserTime).unwrap_or(0);
+                let kernel = u64::try_from(info.TotalKernelTime).unwrap_or(0);
+                CHILD_USER.fetch_add(user, Ordering::Relaxed);
+                CHILD_KERNEL.fetch_add(kernel, Ordering::Relaxed);
+            }
         }
 
         /// Ends every process in the job with `exit_code`.
@@ -134,9 +149,29 @@ mod imp {
         /// The program exited: what it leaves running stays (see the module docs).
         pub fn release(mut self) {
             if let Some(job) = self.0.take() {
+                job.account();
                 job.set_kill_on_close(false);
             }
         }
+    }
+
+    impl Drop for ForegroundJob {
+        fn drop(&mut self) {
+            if let Some(job) = &self.0 {
+                job.account();
+            }
+        }
+    }
+
+    /// CPU time of finished foreground programs and what they started, in 100 ns units:
+    /// Windows' counterpart of `RUSAGE_CHILDREN`, for `time` and `times`.
+    static CHILD_USER: AtomicU64 = AtomicU64::new(0);
+    static CHILD_KERNEL: AtomicU64 = AtomicU64::new(0);
+
+    /// The user and system CPU time of the shell's finished programs (see [`CHILD_USER`]).
+    pub fn children_times() -> (std::time::Duration, std::time::Duration) {
+        let d = |t: &AtomicU64| std::time::Duration::from_nanos(t.load(Ordering::Relaxed).saturating_mul(100));
+        (d(&CHILD_USER), d(&CHILD_KERNEL))
     }
 
     /// Starts `cmd` (created with [`SPAWN_FLAGS`]) in `background`'s job, or in a new
@@ -224,6 +259,61 @@ mod imp {
         let map = BACKGROUND.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.as_ref()?.get(&pid).cloned()
     }
+
+    /// The `$!` of each background job with processes still running.
+    pub fn running_background() -> Vec<ProcessId> {
+        let map = BACKGROUND.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pids: Vec<ProcessId> = map
+            .iter()
+            .flatten()
+            .filter(|(_, job)| job.active_processes() > 0)
+            .map(|(&pid, _)| pid)
+            .collect();
+        pids.sort_unstable();
+        pids
+    }
+
+    /// Whether `exe` is Windows' own `sudo.exe` (in System32) while sudo is turned off in
+    /// Settings (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo`, `Enabled` 0 or
+    /// missing).
+    pub fn is_disabled_windows_sudo(exe: &std::path::Path) -> bool {
+        use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
+        let in_system32 = std::env::var_os("SystemRoot").is_some_and(|root| {
+            let sys32 = std::path::Path::new(&root).join("System32");
+            exe.parent().is_some_and(|dir| {
+                dir.to_string_lossy().eq_ignore_ascii_case(&sys32.to_string_lossy())
+            })
+        });
+        if !in_system32 {
+            return false;
+        }
+        let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let key = wide(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo");
+        let value = wide("Enabled");
+        let mut data = 0u32;
+        let mut size = 4u32;
+        // SAFETY: a DWORD read into a buffer of its size.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&raw mut data).cast(),
+                &mut size,
+            )
+        };
+        status != 0 || data == 0
+    }
+
+    /// Whether this process's standard output is a pipe (a harness reading it).
+    pub fn stdout_is_pipe() -> bool {
+        use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType};
+        use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+        // SAFETY: plain Win32 calls; an invalid handle is just not a pipe.
+        unsafe { GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_PIPE }
+    }
 }
 
 #[cfg(not(windows))]
@@ -243,6 +333,21 @@ mod stub {
 
     /// Nothing to record here.
     pub const fn register_background(_pid: ProcessId, _job: &Arc<Job>) {}
+
+    /// Windows only.
+    pub const fn is_disabled_windows_sudo(_exe: &std::path::Path) -> bool {
+        false
+    }
+
+    /// None here.
+    pub const fn running_background() -> Vec<ProcessId> {
+        Vec::new()
+    }
+
+    /// Not asked here (on Unix this is no shell's business).
+    pub const fn stdout_is_pipe() -> bool {
+        false
+    }
 }
 
 #[cfg(all(test, windows))]

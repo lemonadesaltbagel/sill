@@ -277,6 +277,7 @@ async fn run_async(
     // sill: what the next command of an MCP session starts with, saved after everything
     // the script did (its own EXIT trap included), so nothing in it can skip this.
     crate::session_state::save_if_asked(&mut *shell.lock().await).await;
+    note_jobs_holding_output(&*shell.lock().await);
 
     Ok(exit_code)
 }
@@ -992,5 +993,67 @@ mod tests {
     #[test]
     fn defaults_to_minimal_away_from_a_terminal() {
         assert_eq!(default_input_backend_type(false), InputBackendType::Minimal);
+    }
+}
+
+/// sill: a background job still running as a non-interactive shell exits, with the
+/// shell's output as its own, keeps that pipe open: a harness that reads the output to its
+/// end (`bash -c 'server &'`) then waits for the job, often until its own timeout, with no
+/// sign why. Bash does the same; this says so, once, on stderr.
+fn note_jobs_holding_output(shell: &brush_core::Shell<impl brush_core::ShellExtensions>) {
+    if shell.options().interactive || !brush_core::sys::job::stdout_is_pipe() {
+        return;
+    }
+    let running = brush_core::sys::job::running_background();
+    let holding: Vec<String> = running
+        .iter()
+        .filter_map(|&pid| {
+            let job = shell.jobs().jobs.iter().find(|j| j.representative_pid() == Some(pid));
+            match job {
+                Some(job) if redirects_stdout(&job.command_line) => None,
+                Some(job) => Some(format!("[{}] {}", job.id, job.command_line)),
+                None => Some(format!("pid {pid}")),
+            }
+        })
+        .collect();
+    if holding.is_empty() {
+        return;
+    }
+    eprintln!(
+        "sill: still running in the background with this command's output as theirs: {}. \
+         Whatever reads that output to its end waits for them; start them with it \
+         redirected (cmd > cmd.log 2>&1 &).",
+        holding.join(", ")
+    );
+}
+
+/// Whether `command` sends its standard output somewhere (an unquoted `>`, `>>`, `&>` or
+/// `1>`; `2>` is another stream).
+fn redirects_stdout(command: &str) -> bool {
+    let mut quote = None;
+    let mut prev = ' ';
+    for c in command.chars() {
+        match (quote, c) {
+            (None, '\'' | '"') => quote = Some(c),
+            (Some(q), _) if c == q => quote = None,
+            (None, '>') if !(prev.is_ascii_digit() && prev != '1') => return true,
+            _ => {}
+        }
+        prev = c;
+    }
+    false
+}
+
+#[cfg(test)]
+mod note_tests {
+    #[test]
+    fn stdout_redirections() {
+        use super::redirects_stdout as r;
+        assert!(r("server > log 2>&1"));
+        assert!(r("server &> log"));
+        assert!(r("server 1>>log"));
+        assert!(!r("server 2>err.log"));
+        assert!(!r("echo '>' x"));
+        assert!(!r("server"));
     }
 }

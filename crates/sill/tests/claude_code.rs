@@ -229,6 +229,31 @@ fn detached_console_is_utf8() {
     assert!(out.trim_end().ends_with("437"), "{out:?}");
 }
 
+/// A harness that starts sill with `CREATE_NO_WINDOW` (Node's `windowsHide`) gives it a
+/// windowless console of its own, in the system's OEM code page: sill makes it UTF-8 too.
+#[test]
+#[cfg(windows)]
+fn windowless_console_is_utf8() {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let run = |cp: Option<&str>| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_bash"));
+        cmd.args(["-c", "-l", "chcp.com; cmd.exe /d /c 'echo 中文 Русский 😀'"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .env_remove("SILL_CONSOLE_CP");
+        if let Some(cp) = cp {
+            cmd.env("SILL_CONSOLE_CP", cp);
+        }
+        String::from_utf8_lossy(&cmd.output().expect("run sill").stdout).into_owned()
+    };
+    let out = run(None);
+    assert!(out.lines().next().unwrap_or("").trim_end().ends_with("65001"), "{out:?}");
+    assert!(out.contains("中文 Русский 😀"), "{out:?}");
+    let out = run(Some("437"));
+    assert!(out.lines().next().unwrap_or("").trim_end().ends_with("437"), "{out:?}");
+}
+
 /// Before Windows 11 24H2 there's no AllocConsoleWithOptions; sill attaches to a helper's
 /// windowless console instead. `SILL_CONSOLE_FALLBACK=1` takes that path here too.
 #[test]

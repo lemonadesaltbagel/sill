@@ -373,6 +373,56 @@ mod msys_tests {
     }
 }
 
+/// `cmd /c NAME.bat ...` with `NAME.bat` in the current folder, as `cmd /c .\NAME.bat ...`.
+///
+/// With `NoDefaultCurrentDirectoryInExePath` in the environment (Claude Code sets it for
+/// its shell, so a planted `git.bat` can't stand in for git), cmd.exe doesn't look in the
+/// current folder, and `cmd /c build.bat` said "'build.bat' is not recognized". Without
+/// the variable cmd.exe looks there first, so the rewrite changes nothing. Only a bare
+/// name with a `.bat`/`.cmd` extension is taken, one the agent plainly means as a file
+/// here: a name without one (`git`) still goes through the PATH. `exists` says whether
+/// the name is a file in the command's folder.
+pub fn cmd_local_batch(args: &[String], exists: impl Fn(&str) -> bool) -> Option<Vec<String>> {
+    let i = args
+        .iter()
+        .position(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"))?;
+    let text = args.get(i + 1)?;
+    let name = text.split([' ', '\t']).next()?;
+    let ext = name.rsplit_once('.').map(|(_, e)| e)?;
+    if !(ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
+        || name.contains(['\\', '/', ':', '"', '&', '|', '<', '>', '^', '%'])
+        || !exists(name)
+    {
+        return None;
+    }
+    let mut out = args.to_vec();
+    out[i + 1] = format!(".\\{text}");
+    Some(out)
+}
+
+#[cfg(test)]
+mod local_batch_tests {
+    use super::cmd_local_batch as f;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_batch_file_here_is_run_from_here() {
+        let here = |n: &str| n.eq_ignore_ascii_case("t.bat") || n == "build.cmd";
+        assert_eq!(f(&a(&["/c", "t.bat"]), here), Some(a(&["/c", ".\\t.bat"])));
+        assert_eq!(f(&a(&["/d", "/C", "T.BAT x y"]), here), Some(a(&["/d", "/C", ".\\T.BAT x y"])));
+        assert_eq!(f(&a(&["/c", "build.cmd", "release"]), here), Some(a(&["/c", ".\\build.cmd", "release"])));
+        assert_eq!(f(&a(&["/c", "other.bat"]), here), None, "not here: the PATH's");
+        assert_eq!(f(&a(&["/c", "git"]), |_| true), None, "no extension: the PATH's");
+        assert_eq!(f(&a(&["/c", ".\\t.bat"]), |_| true), None);
+        assert_eq!(f(&a(&["/c", "sub\\t.bat"]), |_| true), None);
+        assert_eq!(f(&a(&["/c", "echo t.bat"]), |_| true), None);
+        assert_eq!(f(&a(&["t.bat"]), |_| true), None);
+    }
+}
+
 /// `/dev/null` as a redirection target in text for cmd.exe, as `nul`.
 ///
 /// Claude Code rewrites `>nul` to `>/dev/null` for its bash, including inside a quoted

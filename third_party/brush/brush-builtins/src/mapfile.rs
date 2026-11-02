@@ -170,7 +170,7 @@ impl MapFileCommand {
                 line.pop();
             }
 
-            let line_str = String::from_utf8_lossy(&line).to_string();
+            let line_str = brush_core::text::decode_output(&line);
 
             entries.push(line_str);
         }

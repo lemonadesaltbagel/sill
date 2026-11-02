@@ -38,6 +38,13 @@ def text(b):
     return b.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
+def _float(t):
+    try:
+        return float(t)
+    except ValueError:
+        return 0.0
+
+
 def utf8(b):
     try:
         b.decode("utf-8")
@@ -118,6 +125,17 @@ CASES = [
     {"id": "enc-git-paths", "cat": "encoding", "needs": ["git"], "why": "git prints non-ASCII paths readably.",
      "files": {"中文.txt": "x"},
      "script": "git init -q && git add -A && git ls-files", "expect": "中文.txt\n"},
+    {"id": "enc-subst-bytes", "cat": "encoding",
+     "why": "`$(...)` of output that isn't UTF-8 (binary, a legacy file) still runs: it doesn't fail the command.",
+     "script": "x=$(printf 'ok\\377\\n'); echo \"rc=$? ${x:0:2}\"", "expect": "rc=0 ok\n"},
+    {"id": "enc-subst-ansi", "cat": "encoding", "needs": ["python"],
+     "why": "`$(...)` of a program writing the system code page (cmd, Java, older tools) reads as text.",
+     "script": "x=$(python -c \"import sys; sys.stdout.buffer.write('caf\\u00e9'.encode('mbcs'))\"); echo \"[$x]\"",
+     "expect": "[café]\n"},
+    {"id": "enc-read-bytes", "cat": "encoding",
+     "why": "`while read` over a file with bytes that aren't UTF-8 reads every line.",
+     "files": {"f": b"a\n\xff\xfe\nb\n"},
+     "script": "n=0; while read -r l; do n=$((n+1)); done < f; echo $n", "expect": "3\n"},
 
     # --- line endings: bytes in, bytes out ---------------------------------------------------------
     {"id": "crlf-sed-keeps", "cat": "crlf", "why": "`sed -i` on a CRLF file keeps CRLF (GNU sed on Linux does).",
@@ -312,6 +330,37 @@ CASES = [
      "files": {"package.json": '{"name": "a", "version": "1.0.0", "scripts": {"build": "set -e && echo ok"}}'},
      "script": "npm run -s build", "needs": ["npm"],
      "check": lambda o, e, c, s: text(o).strip() == "ok" and b"cmd.exe" not in e},
+    {"id": "scripts-cmd-local-bat", "cat": "scripts",
+     "why": "`cmd /c build.bat` runs the batch file in the current folder, also where the harness set "
+            "NoDefaultCurrentDirectoryInExePath (Claude Code does).",
+     "files": {"t.bat": "@echo from-bat\r\n"},
+     "script": "NoDefaultCurrentDirectoryInExePath=1 MSYS_NO_PATHCONV=1 cmd.exe /d /c t.bat", "expect": "from-bat\n"},
+    {"id": "proc-disown", "cat": "process", "why": "`disown` after `server &` works (and empties `jobs`).",
+     "script": "ping -n 2 127.0.0.1 >/dev/null 2>&1 & disown; echo rc=$?; jobs > j.txt; wc -l < j.txt",
+     "check": lambda o, e, c, s: text(o).split() == ["rc=0", "0"]},
+    {"id": "proc-pkill-pattern-case", "cat": "process",
+     "why": "`pkill PING` matches as on Linux (case-sensitive): it doesn't end an app whose name merely contains `ping`.",
+     "script": "cp \"$BASH\" ./SnippingDecoy.exe 2>/dev/null; (./SnippingDecoy.exe -c 'sleep 20' >/dev/null 2>&1 &); "
+               "sleep 2; pkill PING; echo \"rc=$?\"; pgrep -x SnippingDecoy >/dev/null && echo alive; pkill -x SnippingDecoy",
+     "expect": "rc=1\nalive\n", "after_no_process": "SnippingDecoy"},
+    {"id": "proc-bg-holds-output-note", "cat": "process", "direct_only": True,
+     "why": "A background job left running with the shell's output as its own is named on stderr, so a "
+            "harness's wait for the output to close has an explanation.",
+     "script": "ping -n 2 127.0.0.1 & echo started",
+     "check": lambda o, e, c, s: b"still running in the background" in e},
+    {"id": "tools-seq-head", "cat": "tools", "why": "`seq ... | head` prints no broken-pipe error.",
+     "script": "seq 1 100000 | head -1", "check": lambda o, e, c, s: text(o) == "1\n" and e.strip() == b""},
+    {"id": "tools-make-recipe", "cat": "tools",
+     "why": "make runs recipes with the shell (sill's sh.exe), wherever it is installed (a path with a space too).",
+     "files": {"Makefile": "all:\n\t@echo made $(word 2,a b)\n\t@echo shell $$((1+1))\n"},
+     "script": "make", "expect": "made b\nshell 2\n"},
+    {"id": "tools-which-missing", "cat": "tools",
+     "why": "`which` agrees with what runs: a missing program is not found (status 1).",
+     "script": "which nosuchcmd_xyz >/dev/null 2>&1; echo rc=$?", "expect": "rc=1\n"},
+    {"id": "tools-time-cpu", "cat": "tools", "needs": ["python"],
+     "why": "`time` reports the CPU time a program used, not 0.",
+     "script": "TIMEFORMAT=%U; { time python -c 'sum(range(3*10**7))'; } 2>&1",
+     "check": lambda o, e, c, s: _float(text(o).strip().splitlines()[-1] if text(o).strip() else "") > 0.1},
 
     # --- errors and identity -------------------------------------------------------------------------
     {"id": "err-not-found", "cat": "errors", "why": "A missing command: status 127 and bash's message shape.",

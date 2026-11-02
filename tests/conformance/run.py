@@ -32,6 +32,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from cases import CASES, text  # noqa: E402
 
 DETACHED_PROCESS = 0x00000008
+CREATE_NO_WINDOW = 0x08000000
+# How each shell is started: with no console (DETACHED_PROCESS), or with a console of its own
+# that has no window (CREATE_NO_WINDOW, what Node's `windowsHide` gives a console program);
+# --console picks it.
+LAUNCH = DETACHED_PROCESS
 CATEGORY_TITLES = {
     "argv": "Arguments to native programs", "paths": "Paths", "encoding": "Encoding",
     "crlf": "Line endings and bytes", "process": "Processes", "limits": "Size limits",
@@ -76,7 +81,7 @@ def run_in_job(argv, timeout, **kw):
 
     kill_on_close(True)
     p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         creationflags=DETACHED_PROCESS | 0x4, **kw)  # 0x4: CREATE_SUSPENDED
+                         creationflags=LAUNCH | 0x4, **kw)  # 0x4: CREATE_SUSPENDED
     k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(p._handle)))
     ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(int(p._handle)))
     try:
@@ -129,7 +134,7 @@ def run_case(case, shell, echoargs, timeout, mcp=False):
                 # has, a pipe's included (as under Git Bash), and a pipe would wait for it.
                 with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
                     p = subprocess.run(argv, cwd=work, env=shell_env(), stdin=subprocess.DEVNULL,
-                                       stdout=fo, stderr=fe, creationflags=DETACHED_PROCESS,
+                                       stdout=fo, stderr=fe, creationflags=LAUNCH,
                                        timeout=timeout)
                     fo.seek(0)
                     fe.seek(0)
@@ -176,7 +181,7 @@ class McpClient:
 
     def __init__(self, argv, cwd, env):
         self.p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, creationflags=DETACHED_PROCESS)
+                                  stderr=subprocess.DEVNULL, creationflags=LAUNCH)
         self.n = 0
         self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                     "clientInfo": {"name": "conformance", "version": "1"}})
@@ -290,11 +295,15 @@ def main():
     ap.add_argument("--report", required=True)
     ap.add_argument("--only", action="append")
     ap.add_argument("--timeout", type=int, default=60)
+    ap.add_argument("--console", choices=["detached", "hidden"], default="detached",
+                    help="start shells with no console, or with a windowless one (Node's windowsHide)")
     a = ap.parse_args()
+    global LAUNCH
+    LAUNCH = CREATE_NO_WINDOW if a.console == "hidden" else DETACHED_PROCESS
     shells = [s.split("=", 1) for s in a.shell] + [s.split("=", 1) for s in a.mcp]
     mcp_names = {s.split("=", 1)[0] for s in a.mcp}
     import ctypes
-    meta = {"os": f"Windows {platform.version()}", "acp": ctypes.windll.kernel32.GetACP(),
+    meta = {"os": f"Windows {platform.version()}", "acp": ctypes.windll.kernel32.GetACP(), "console": a.console,
             "date": time.strftime("%Y-%m-%d %H:%M"), "versions": {n: version(p) for n, p in shells}}
     results = {}
     for case in CASES:

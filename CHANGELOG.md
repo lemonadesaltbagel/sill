@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+Fixes from a run of 0.6.0 on a Chinese-locale Windows 11 (code page 936), with a space in the user name and no Git, Node or Python.
+
+### Fixes
+- **`$(...)` of output that isn't UTF-8 failed the whole command** ("stream did not contain valid UTF-8"): `x=$(cmd /c echo 中文)` on a Chinese system, `x=$(cat file.bin)`. Output is read as UTF-8, else (line by line) in the system's code page, else with invalid bytes replaced; `read` and `mapfile` read such lines in the system's code page too.
+- **`pkill PING` ended the user's SnippingTool:** patterns matched case-insensitively. They match as procps' do (case-sensitively; `-i` for not), a whole name in any case (`pkill ping` still ends `PING.EXE`). A process with a window open isn't ended by a pattern that only matches part of its name (its exact name or its PID does), and each process a pattern ends is named on stderr. `pkill -e` echoes as procps' does.
+- **make's recipes all failed when sill was installed in a folder with a space** (`C:\Users\Jane Doe\scoop\...`): make split the shell's path at the space ("CreateProcess(C:/Users/Jane, ...) failed", e=193). The bundled make keeps it one word.
+- **Console programs' text came out in the local code page (GBK) under harnesses that start sill with a hidden console** (`CREATE_NO_WINDOW`, Node's `windowsHide`): sill only set UTF-8 on a console it created. A windowless console sill was started with alone is its own and is set to UTF-8 (or `SILL_CONSOLE_CP`) too; a terminal's never is.
+- **`cmd /c build.bat` said "'build.bat' is not recognized"** when the harness set `NoDefaultCurrentDirectoryInExePath` (Claude Code does). A bare `NAME.bat`/`NAME.cmd` that's in the current folder is passed as `.\NAME.bat`; names without an extension still go through the PATH.
+- **`disown`** said "not implemented" (status 99). It removes jobs from the table (`-a`, `-r`, `%N`, a PID); a background job already outlives the shell.
+- **A background job left running at exit with the shell's output as its own** (`bash -c 'server &'`) kept the caller waiting for the output to close, with no sign why (bash does the same). sill says so on stderr, with the redirection that avoids it.
+- **`which python`** named the Store's stand-in `python.exe` while `python` said "command not found". `which` is a builtin on Windows, from the shell's own lookup.
+- **`seq ... | head`** printed "write error: Broken pipe": Windows has no SIGPIPE to end the writer quietly. The bundled tools don't print it.
+- **Windows' own `sudo`, turned off,** printed an escape sequence and a pointer to Settings; sill says sudo is off and elevation needs a person.
+- **`time` showed 0 for user and sys:** they come from the programs' Job Objects now.
+
+### MCP server
+- **A workspace in Local AppData** (as Claude Desktop keeps one) was taken for the client's install folder, and commands silently started in the home folder. Only the folder of the program that started the server (and a drive root or Windows' folders) counts now, and the first result says when commands start elsewhere and why.
+- **The `bash` tool's description lists the tools this machine has** (git, node, python, ...) and those it doesn't, instead of a fixed list that named git, npm and python on machines without them.
+- **Errors read `bash: line 1: ...`**, not with the path of the server's temporary script.
+
+### Checks
+- **Conformance runs sill from a folder with a space in its name, and a second time with a windowless console**; new cases for bytes in `$(...)` and `read`, `cmd /c NAME.bat`, `disown`, `pkill` beside an app whose name contains the pattern, make recipes, `which`, `seq | head` and `time`.
+
 ### Docs
 - **Results:** Windows-boundary tasks (`winbench`), on GitHub's runner and on a Chinese-locale Windows: every shell solves them; sill takes the fewest turns.
 
