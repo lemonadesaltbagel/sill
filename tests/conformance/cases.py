@@ -38,11 +38,10 @@ def text(b):
     return b.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
-def _float(t):
-    try:
-        return float(t)
-    except ValueError:
-        return 0.0
+def _user_secs(t):
+    """The user time `time` printed (`user\t0m0.390s`), in seconds; 0 if there's none."""
+    m = re.search(r"^user\s+(\d+)m([\d.]+)s", t, re.M)
+    return int(m.group(1)) * 60 + float(m.group(2)) if m else 0.0
 
 
 def utf8(b):
@@ -359,8 +358,8 @@ CASES = [
      "script": "which nosuchcmd_xyz >/dev/null 2>&1; echo rc=$?", "expect": "rc=1\n"},
     {"id": "tools-time-cpu", "cat": "tools", "needs": ["python"],
      "why": "`time` reports the CPU time a program used, not 0.",
-     "script": "TIMEFORMAT=%U; { time python -c 'sum(range(3*10**7))'; } 2>&1",
-     "check": lambda o, e, c, s: _float(text(o).strip().splitlines()[-1] if text(o).strip() else "") > 0.1},
+     "script": "{ time python -c 'sum(range(3*10**7))'; } 2>&1",
+     "check": lambda o, e, c, s: _user_secs(text(o)) > 0.1},
 
     # --- errors and identity -------------------------------------------------------------------------
     {"id": "err-not-found", "cat": "errors", "why": "A missing command: status 127 and bash's message shape.",

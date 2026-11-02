@@ -563,7 +563,11 @@ fn run_match<SE: brush_core::ShellExtensions>(
             )?;
         }
         for p in &sel {
-            if let Err(e) = win::end_tree(p.pid, code) {
+            // Ending a tree also ends its processes that matched (a bundled tool's own
+            // child); one already gone has nothing to say.
+            if let Err(e) = win::end_tree(p.pid, code)
+                && e != "No such process"
+            {
                 writeln!(
                     context.stderr(),
                     "{name}: killing pid {} failed: {e}",
