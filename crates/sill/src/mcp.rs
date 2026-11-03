@@ -539,7 +539,7 @@ impl Server {
         cmd.arg("--noprofile")
             .arg("--norc")
             .arg("-c")
-            .arg(format!(". {}", single_quote(&display(script))))
+            .arg(std::fs::read_to_string(script)?)
             .arg("bash");
         cmd.current_dir(&session.cwd);
         cmd.env_clear();
@@ -631,15 +631,17 @@ impl Files {
     }
 }
 
-/// The script a foreground command runs as: the command itself (sourced, so `cd` and
-/// `export` act on this shell), and an EXIT trap that records where it ended up, however it
-/// ends (`exit`, `set -e`, the last command).
+/// The script (`bash -c`) a command runs as: the last command's state, then the command
+/// itself in this shell, so `cd` and `export` act on it.
 fn wrapper(files: &Files) -> String {
     // The last command's functions, aliases and options, then the command. Aliases work as
     // in an interactive shell; `errexit` isn't carried over (it would end later commands at
     // their first failure). The shell itself saves the state as it ends.
+    // The command runs through `eval`, as Claude Code's own Bash tool runs it, not `.`:
+    // a sourced file's end runs the RETURN trap, so a trap a command set fired after every
+    // later command.
     format!(
-        ". {restore} 2>/dev/null\nset +o errexit\nshopt -s expand_aliases\n. {cmd}\n",
+        ". {restore} 2>/dev/null\nset +o errexit\nshopt -s expand_aliases\neval \"$(< {cmd})\"\n",
         restore = single_quote(&display(&files.restore)),
         cmd = single_quote(&display(&files.cmd)),
     )
