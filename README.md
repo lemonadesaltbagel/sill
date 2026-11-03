@@ -21,7 +21,7 @@ Measured on Windows with the Git Bash that ships with Git for Windows (and, for 
 
 ### Where Windows gets in the way, sill holds up
 
-**Conformance suite:** 96 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server, with sill installed in a folder whose name has a space. sill passes **96/96** both ways; Git Bash passes 70.
+**Conformance suite:** 102 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server, with sill installed in a folder whose name has a space. sill passes **102/102** both ways; Git Bash passes 74.
 
 | area | cases | sill | Git Bash |
 |---|---|---|---|
@@ -31,12 +31,12 @@ Measured on Windows with the Git Bash that ships with Git for Windows (and, for 
 | Processes (background jobs, `kill`, `pkill`, `disown`) | 12 | **12** | 10 |
 | Line endings and bytes | 5 | **5** | 3 |
 | Size limits (long scripts, thousands of arguments) | 4 | **4** | 3 |
-| Running scripts (`#!`, `cmd /c NAME.bat`) | 6 | **6** | 5 |
+| Running scripts (`#!`, `cmd /c NAME.bat`, CRLF files, traps in subshells and functions) | 10 | **10** | 7 |
 | Programs that prompt (`git commit` with no message, `vi`, pagers) | 4 | **4** | 1 |
 | Look-alikes (inputs sill's rules must leave alone) | 12 | **12** | 7 |
-| Paths, files, errors | 15 | **15** | 15 |
+| Paths, files, errors | 17 | **17** | 17 |
 
-In a Chinese-locale Windows container (code page 936, no Git on the machine), sill passes **94/94** of the cases that apply there, also with a windowless console; Git Bash passes 65.
+In a Chinese-locale Windows container (code page 936, no Git on the machine), sill passes **100/100** of the cases that apply there, also with a windowless console; Git Bash passes 69.
 
 **Real agents, fewer failed commands:** 18 tasks with automatic checks (a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, an MSVC build), DeepSeek's low-cost model, two runs per task on the Chinese-locale laptop:
 
@@ -196,7 +196,7 @@ A value you've already set is kept. All of these are visible with `env`.
   - It's a different folder on each drive: what was written to `/tmp` while working on `D:` isn't there from `C:`.
   - It's created at the drive's root and inherits that folder's permissions: on a machine several people use, the others can typically change files in it, as in a `/tmp` without the sticky bit.
   - Use `$TMPDIR` (your user's temporary folder) for anything private.
-- **Windows has no signals.** Traps for INT and TERM are accepted and listed, but only `EXIT`, `ERR`, `DEBUG` and `RETURN` run. `kill` ends processes.
+- **Windows has no signals.** Traps for INT and TERM are accepted and listed, but only `EXIT`, `ERR`, `DEBUG` and `RETURN` run (in subshells and functions as in bash). `kill` ends processes.
 - **Unsupported:** `coproc`, stopped jobs (`fg` after Ctrl+Z), passing descriptors above 2 to a program, `exec -a`, and `cp <(cmd) file`.
 - **Programs a finished command leaves running keep running** (`start`, an editor, a build daemon), as from a terminal. A command killed before it finishes, by a harness's timeout for one, takes everything it started with it. Through the MCP server, such leftovers become a background job of the session and end with it.
 - **Java writes its console output in the ANSI code page** when it goes to a pipe (JDK 18 and later), so through `bash.exe -c` non-ASCII text from Java arrives garbled (GBK on Chinese Windows) or as `??` (characters the code page can't hold). sill doesn't change Java's settings there, since the fix makes every JVM print a note on stderr, which breaks scripts that read `java -version 2>&1`. To get UTF-8, set `JAVA_TOOL_OPTIONS=-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8` in your environment. The MCP server does this for you.

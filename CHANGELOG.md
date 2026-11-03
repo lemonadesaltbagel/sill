@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 (2026-11-03)
 
 Fixes from an agent's run of 0.6.1 (Claude in Claude Code's desktop app, English Windows 11, a space in the user name, no Git, Node or Python).
 
