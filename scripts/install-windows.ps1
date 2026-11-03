@@ -43,6 +43,12 @@ New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
 Move-Item $src $dest
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 $bash = Join-Path $dest 'bash.exe'
+# `sill` as a command: a hard link to bash.exe (the same program; the zip doesn't carry a
+# second 27 MB copy), or a copy where the folder's volume has no hard links.
+$sill = Join-Path $dest 'sill.exe'
+if (-not (Test-Path $sill)) {
+    try { New-Item -ItemType HardLink -Path $sill -Target $bash | Out-Null } catch { Copy-Item $bash $sill }
+}
 "installed: $bash ($(& $bash --version | Select-Object -First 1))"
 
 if ($AddToPath) {

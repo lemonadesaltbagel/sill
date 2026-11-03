@@ -104,9 +104,30 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
 
         let source_info = crate::SourceInfo::from(path.to_owned());
 
+        // sill: a script with Windows line endings (or a byte order mark) fails in ways that
+        // don't point at the cause: bash reads each CR as part of its line, so `cd /tmp`
+        // says /tmp doesn't exist and `pwd` isn't found, and an `if` never closes. Say so
+        // once, up front. (Windows only: there agents and editors write such files.)
+        #[cfg(windows)]
+        let opened_file = {
+            use std::io::Write as _;
+            let mut bytes = vec![];
+            std::io::Read::read_to_end(&mut { opened_file }, &mut bytes)
+                .map_err(|e| error::ErrorKind::FailedSourcingFile(path.to_owned(), e))?;
+            if let Some(note) = line_ending_note(&bytes, &crate::sys::fs::display_path(path)) {
+                let _ = writeln!(params.stderr(self), "{note}");
+            }
+            std::io::Cursor::new(bytes)
+        };
+
         let mut result = self
             .source_file(opened_file, &source_info, args, params, call_type)
             .await?;
+
+        // sill: a sourced script's end runs the RETURN trap, as a function's does.
+        if matches!(call_type, callstack::ScriptCallType::Source) {
+            self.run_return_trap(Some(result.exit_code.into()), params).await;
+        }
 
         // Handle control flow at script execution boundary. If execution completed
         // with a `return`, we need to clear it since it's already been "used". All
@@ -285,5 +306,39 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
         expr: &brush_parser::ast::ArithmeticExpr,
     ) -> Result<i64, error::Error> {
         Ok(expr.eval(self)?)
+    }
+}
+
+/// sill: what's wrong with a script file's bytes for Bash, if anything: Windows (CRLF)
+/// line endings, or a UTF-8 byte order mark, which bash reads as part of the first word.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn line_ending_note(bytes: &[u8], shown: &str) -> Option<String> {
+    let quoted = crate::escape::force_quote(shown, crate::escape::QuoteMode::SingleQuote);
+    if bytes.starts_with(b"\xEF\xBB\xBF") {
+        return Some(format!(
+            "{shown}: note: the file starts with a UTF-8 byte order mark, which Bash reads as part \
+             of the first command; `sed -i '1s/^\\xEF\\xBB\\xBF//' {quoted}` removes it"
+        ));
+    }
+    bytes.windows(2).any(|w| w == b"\r\n").then(|| {
+        format!(
+            "{shown}: note: the file has Windows (CRLF) line endings; Bash reads each CR as part \
+             of its line, so commands fail oddly (`$'pwd\\r': command not found`). \
+             `sed -i 's/\\r$//' {quoted}` converts it"
+        )
+    })
+}
+
+#[cfg(test)]
+mod line_ending_tests {
+    use super::line_ending_note;
+
+    #[test]
+    fn crlf_and_bom_are_named() {
+        assert!(line_ending_note(b"echo hi\n", "a.sh").is_none());
+        let n = line_ending_note(b"x=1\r\ncd /tmp\r\n", "a.sh").unwrap();
+        assert!(n.starts_with("a.sh: note: the file has Windows (CRLF)") && n.contains("sed -i 's/\\r$//' 'a.sh'"), "{n}");
+        let n = line_ending_note(b"\xEF\xBB\xBFecho hi\n", "my script.sh").unwrap();
+        assert!(n.contains("byte order mark") && n.contains("'my script.sh'"), "{n}");
     }
 }

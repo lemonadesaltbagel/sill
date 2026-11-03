@@ -162,6 +162,17 @@ impl TryFrom<TrapSignal> for i32 {
     }
 }
 
+/// sill: where a trap was set: which shell (a subshell is a shell of its own) and which
+/// scope in it (the function call it was set in, or the shell itself).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct TrapOwner {
+    /// The shell (0: the top-level one; each subshell has its own id).
+    pub shell: u64,
+    /// The function call, or the shell itself when set outside any function.
+    pub scope: u64,
+}
+
 /// A handler for a trap signal.
 #[derive(Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -170,6 +181,9 @@ pub struct TrapHandler {
     pub command: String,
     /// Source information for where the trap handler was defined.
     pub source_info: crate::SourceInfo,
+    /// sill: where it was set.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub owner: TrapOwner,
 }
 
 /// Configuration for trap handlers in the shell.
@@ -209,17 +223,20 @@ impl TrapHandlerConfig {
     /// * `signal_type` - The type of signal to register a handler for.
     /// * `command` - The command to execute when the signal is trapped.
     /// * `source_info` - The source info for where the trap handler was defined.
+    /// * `owner` - Where it was set (see `Shell::trap_owner`).
     pub fn register_handler(
         &mut self,
         signal_type: TrapSignal,
         command: String,
         source_info: crate::SourceInfo,
+        owner: TrapOwner,
     ) {
         let _ = self.handlers.insert(
             signal_type,
             TrapHandler {
                 command,
                 source_info,
+                owner,
             },
         );
     }

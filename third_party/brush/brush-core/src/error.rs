@@ -201,8 +201,10 @@ pub enum ErrorKind {
     #[error(transparent)]
     FormattingError(#[from] std::fmt::Error),
 
-    /// An error occurred while parsing.
-    #[error("{1}: {0}")]
+    /// An error occurred while parsing. (sill: shown without the source, which the
+    /// diagnostic's `name: line N:` prefix already gives: `x.sh: line 1: x.sh: syntax error`
+    /// named it twice, and an `eval` string as `environment:1,1`.)
+    #[error("{0}")]
     ParseError(crate::parser::ParseError, crate::SourceInfo),
 
     /// An error occurred while parsing a function body.
@@ -290,7 +292,8 @@ pub enum ErrorKind {
     HistoryNotEnabled,
 
     /// Expanding an unset variable.
-    #[error("expanding unset variable: {0}")]
+    /// sill: bash's words (`X: unbound variable`), which models know.
+    #[error("{0}: unbound variable")]
     ExpandingUnsetVariable(String),
 
     /// An internal error occurred.

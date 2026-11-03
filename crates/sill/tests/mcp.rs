@@ -142,12 +142,31 @@ fn functions_aliases_and_options_carry_over() {
 }
 
 #[test]
+fn arguments_models_get_wrong() {
+    let mut c = Client::start(&workdir("args"));
+    // Claude Code's own name for the timeout.
+    let (r, _) = c.call("bash", json!({"command": "sleep 20", "timeout": 1500}));
+    assert!(r.contains("stopped after 1."), "{r}");
+    let (r, err) = c.call("bash", json!({"command": "echo hi", "timout_ms": 10}));
+    assert!(err && r.contains("`timout_ms`") && r.contains("timeout_ms"), "{r}");
+    let (r, err) = c.call("bash", json!({"command": "echo hi", "description": "say hi"}));
+    assert!(!err && r.starts_with("hi\n"), "{r}");
+    // Job ids start at 1 and may come as strings.
+    let (r, _) = c.call("bash", json!({"command": "sleep 60", "run_in_background": true}));
+    assert!(r.starts_with("started background job 1 "), "{r}");
+    let (r, err) = c.call("bash_kill", json!({"id": "1"}));
+    assert!(!err && r.contains("(stopped)"), "{r}");
+}
+
+#[test]
 fn errors_read_as_in_a_terminal() {
     let mut c = Client::start(&workdir("errors"));
     let r = c.bash("echo \"[$0]\"; nosuchcommand_xyz");
     assert!(r.starts_with("[bash]\n"), "{r}");
     assert!(r.contains("bash: line 1: nosuchcommand_xyz: command not found"), "{r}");
     assert!(!r.contains("cmd.sh"), "{r}");
+    let r = c.bash("f() {");
+    assert!(r.contains("bash: line ") && r.contains("syntax error") && !r.contains("cmd.sh"), "{r}");
 }
 
 #[test]

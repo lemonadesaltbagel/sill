@@ -44,8 +44,9 @@ pub const fn posix_message(code: i32) -> Option<&'static str> {
         206 => "File name too long",
         // ERROR_DIRECTORY (a file where a directory was expected)
         267 => "Not a directory",
-        // ERROR_PRIVILEGE_NOT_HELD
-        1314 => "Operation not permitted",
+        // ERROR_PRIVILEGE_NOT_HELD: almost always `ln -s` without the symbolic-link
+        // privilege, which says why and what grants it.
+        1314 => "Operation not permitted (Windows creates symbolic links only with Developer Mode on or as Administrator)",
         // ERROR_CANT_RESOLVE_FILENAME (a symbolic link loop)
         1921 => "Too many levels of symbolic links",
         _ => return None,

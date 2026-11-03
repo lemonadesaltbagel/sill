@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+Fixes from an agent's run of 0.6.1 (Claude in Claude Code's desktop app, English Windows 11, a space in the user name, no Git, Node or Python).
+
+### Fixes
+- **Traps in subshells and functions didn't run:** `( trap 'rm -rf "$tmp"' EXIT; ... )` left the folder behind, `$( trap ... EXIT; ... )` lost the trap's output, a function's own `trap ... RETURN` and `trap ... ERR` and a subshell's `trap ... ERR` never fired, and a sourced script's end didn't run the RETURN trap. They run as in bash; a subshell never runs its parent's EXIT trap. brush's compat suite: 10 trap cases pass that didn't.
+- **A script with Windows (CRLF) line endings failed with errors that hid the cause** (`cd: /tmp: No such file or directory`, `pwd: command not found`, a lone "syntax error at end of input"). sill says up front that the file has CRLF line endings and how to convert it, and names in errors show the CR as bash shows it (`$'pwd\r': command not found`). A UTF-8 byte order mark (PowerShell 5.1 writes one) gets the same.
+- **`set -u`** says `X: unbound variable`, bash's words, not `expanding unset variable: ${X}`.
+- **`jobs -l`** and **`jobs %N`** were "not yet implemented".
+- **Windows' own `sudo`, turned off,** still ran: the check compared `C:/WINDOWS/system32` with `C:\Windows\System32`.
+- **`brush: error flushing stdout: The pipe is being closed. (os error 232)`** after `... | head`: a reader that went away isn't reported.
+- **`ln -s` without the symbolic-link privilege** said only "Operation not permitted"; it says Windows creates symbolic links only with Developer Mode on or as Administrator.
+- **`python3: command not found`** suggested `python` where there's no Python either; then it says Python isn't installed and how to install it.
+- **`cygpath -w /tmp`** gave `\tmp`, with no drive; it gives `C:\tmp` (the current folder's drive).
+- **`bash.exe --help`** began with brush's banner and never mentioned sill; it begins with what sill is, `--mcp` and the `SILL_*` settings.
+
+### MCP server
+- **The `bash` tool's description listed `apply_patch` among the tools "not installed".**
+- **`timeout`** (the name in Claude Code's own Bash tool) was silently ignored, so `sleep 30` ran its 30 s; it's taken as `timeout_ms`. Other unknown arguments are an error naming them (`description` is accepted).
+- **Syntax errors named the server's temporary script** (`bash: line 1: C:/.../5.cmd.sh: syntax error ...`); they read `bash: line 1: syntax error ...`.
+- **Job ids** count from 1, apart from commands, and `"3"` is taken as well as `3`. A timeout says `stopped after 1.5 s`.
+
+### Packaging
+- **The zip holds the shell twice, not three times** (`bash.exe`, and `sh.exe` for make and `#!/bin/sh`): about 27 MB less. `install-windows.ps1` links `sill.exe` to `bash.exe`; Scoop and winget name `bash.exe` `sill`.
+
+### Checks
+- **Conformance:** CRLF and byte-order-mark scripts, a subshell's EXIT trap and a function's RETURN and ERR traps, `cygpath -w /tmp`, `set -u` (102 cases).
+
 ## 0.6.1 (2026-11-02)
 
 Fixes from a run of 0.6.0 on a Chinese-locale Windows 11 (code page 936), with a space in the user name and no Git, Node or Python.

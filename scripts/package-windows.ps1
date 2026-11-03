@@ -1,6 +1,6 @@
 # Assembles the Windows distribution of sill:
 #
-#   <Out>\sill\bash.exe, sill.exe     the shell (coreutils built in)
+#   <Out>\sill\bash.exe, sh.exe       the shell (coreutils built in); install-windows.ps1 adds sill.exe
 #   <Out>\sill\tools\*.exe            native busybox-w32 applets for the rest
 #                                     (grep, sed, awk, find, xargs, diff, ...)
 #   <Out>\sill\SETUP.txt              how to point agent harnesses at it
@@ -42,9 +42,10 @@ $tools = Join-Path $dist 'tools'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $tools | Out-Null
 
-foreach ($exe in 'bash.exe', 'sill.exe') {
-    Copy-Item (Join-Path $Release $exe) $dist
-}
+# One copy of the shell for `bash`; sh.exe below is another (make runs it for every
+# recipe, so it's the program itself, not a stub). `sill` is bash.exe under that name: the
+# installer links it, Scoop and winget alias it.
+Copy-Item (Join-Path $Release 'bash.exe') $dist
 # `sh` is sill too, as Git Bash's sh is bash (and `#!/bin/sh` scripts run in sill): one
 # shell for `sh x.sh`, `bash x.sh` and `./x.sh`, not busybox's ash for one of them.
 Copy-Item (Join-Path $Release 'bash.exe') (Join-Path $dist 'sh.exe')
@@ -79,7 +80,7 @@ if ($Ripgrep) {
 sill: an agent-first Bash runtime for native Windows
 ====================================================
 
-bash.exe   the shell (sill.exe and sh.exe are the same program)
+bash.exe   the shell (sh.exe is the same program)
 tools\     GNU grep and sed, ripgrep (rg), jq, plus awk, xargs, diff, which, ... (busybox-w32).
            sill puts this directory first on PATH; set SILL_NO_TOOLS=1 to stop it.
 

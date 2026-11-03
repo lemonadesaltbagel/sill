@@ -41,7 +41,7 @@ pub enum EvalError {
     ParseError(String),
 
     /// Error expanding an unset variable.
-    #[error("expanding unset variable: {0}")]
+    #[error("{0}: unbound variable")]
     ExpandingUnsetVariable(String),
 
     /// Expression recursion level exceeded.

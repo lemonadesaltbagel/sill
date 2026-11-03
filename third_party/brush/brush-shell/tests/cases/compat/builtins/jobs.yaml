@@ -64,7 +64,6 @@ cases:
       - 'case $- in *m*) echo "job control";; *) echo "no job control";; esac'
 
   - name: "Job builtins fail with status 1 for a job that doesn't exist"
-    known_failure: true # TODO(jobs): brush returns 99 (unimplemented)
     ignore_stderr: true
     stdin: |
       jobs %9

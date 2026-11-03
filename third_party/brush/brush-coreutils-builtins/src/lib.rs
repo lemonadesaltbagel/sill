@@ -84,7 +84,11 @@ fn prepare_uutil_runtime(util_crate_name: &str) {
 fn finalize_uutil_runtime() {
     use std::io::Write;
     if let Err(e) = std::io::stdout().flush() {
-        eprintln!("brush: error flushing stdout: {e}");
+        // sill: a reader that went away (`od -c | head -2`) is no error to report; on
+        // Linux SIGPIPE would have ended the tool first.
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            eprintln!("{}: error flushing stdout: {e}", uucore::util_name());
+        }
     }
 }
 

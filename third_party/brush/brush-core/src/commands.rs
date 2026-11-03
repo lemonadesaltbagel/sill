@@ -933,6 +933,10 @@ pub(crate) async fn invoke_shell_function(
     // may still change the shell's persistent open files via builtins (e.g. `exec`).
     let result = body.execute(&mut shell, &context.params).await;
 
+    // sill: the RETURN trap, in the function's frame, as bash runs it.
+    let status = result.as_ref().ok().map(|r| u8::from(r.exit_code));
+    shell.run_return_trap(status, &context.params).await;
+
     // Leave the function: pop its frame and its local variables.
     drop(shell);
 
@@ -1018,9 +1022,11 @@ async fn run_substitution_command(
     let source_info = crate::SourceInfo::from("main");
 
     // Handle the parse result using default shell behavior.
-    shell
+    let result = shell
         .run_parsed_result(parse_result, &source_info, &params)
-        .await
+        .await;
+    // sill: with the EXIT trap it set, whose output is part of the substitution.
+    shell.finish_subshell(result, &params).await
 }
 
 // Detects a subshell command that consists solely of a single input redirection

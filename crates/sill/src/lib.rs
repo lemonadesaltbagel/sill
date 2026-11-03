@@ -21,6 +21,11 @@ pub fn run() {
         brush_shell::session_state::save_on_exit(base.into());
     }
     trace_invocation();
+    if std::env::args_os().skip(1).eq(["--help"]) {
+        // What sill is, before brush's option list: `--help` is where an agent that meets an
+        // unknown shell looks first.
+        print!("{}", help_header());
+    }
     if std::env::args_os().skip(1).eq(["--version"]) {
         println!(
             "sill {} (brush {}, {})",
@@ -48,6 +53,26 @@ pub fn run() {
     }
 
     brush_shell::entry::run();
+}
+
+/// The start of `--help`: sill, its MCP server and its settings.
+fn help_header() -> String {
+    format!(
+        "\
+sill {}: native Bash for Windows, for coding agents (https://github.com/lemonadesaltbagel/sill)
+
+  bash.exe -c 'COMMAND'    run a command          bash.exe SCRIPT [ARGS]   run a script
+  bash.exe --mcp           an MCP server on stdin/stdout (tools: bash, bash_output, bash_kill)
+
+Settings (environment): SILL_CONSOLE_CP (code page of sill's console, default 65001),
+SILL_MCP_ROOT (where MCP commands start), SILL_NO_ENV_DEFAULTS=1 (no agent defaults such as
+PAGER=cat), SILL_TRACE=FILE (log each invocation). Bundled tools are in SILL_TOOLS_DIR.
+
+Shell options (sill is a fork of brush):
+
+",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// The argument that makes sill the editor git gets when no one is at a terminal (see

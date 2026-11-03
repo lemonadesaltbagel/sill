@@ -117,12 +117,14 @@ impl TrapCommand {
         // TODO(source-info): Provide the location of the specific token that makes up
         // `self.args[0]`.
         let source_info = context.shell.call_stack().current_pos_as_source_info();
+        let owner = context.shell.trap_owner();
 
         for signal in signals {
             context.shell.traps_mut().register_handler(
                 signal,
                 handler.to_owned(),
                 source_info.clone(),
+                owner,
             );
         }
     }

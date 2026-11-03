@@ -24,16 +24,73 @@ impl brush_core::extensions::ErrorFormatter for Formatter {
             // sill: as bash says it for a command given as a path (`./venv/bin/python`): the
             // path is what's wrong, not a missing program.
             brush_core::error::ErrorKind::CommandNotFound(cmd) if cmd.contains(['/', '\\']) => {
-                format!("{cmd}: No such file or directory")
+                format!("{}: No such file or directory", ansi_c_quoted(cmd))
             }
-            brush_core::error::ErrorKind::CommandNotFound(cmd) => match unsupported_hint(cmd) {
-                Some(hint) => format!("{cmd}: command not found ({hint})"),
-                None => format!("{cmd}: command not found"),
-            },
+            brush_core::error::ErrorKind::CommandNotFound(cmd) => {
+                let shown = ansi_c_quoted(cmd);
+                let hint = if is_python(cmd) && shell.find_first_executable_in_path("python").is_none() {
+                    // sill: no `python` either (the Store's stand-in doesn't count).
+                    Some("Python isn't installed here; `winget install -e --id Python.Python.3.13` installs it")
+                        .filter(|_| cfg!(windows))
+                } else {
+                    unsupported_hint(cmd)
+                };
+                match hint {
+                    Some(hint) => format!("{shown}: command not found ({hint})"),
+                    None => format!("{shown}: command not found"),
+                }
+            }
             _ => format!("{err:#}"),
         };
 
         std::format!("{prefix}{message}\n")
+    }
+}
+
+/// sill: Python by any of the names agents use.
+fn is_python(cmd: &str) -> bool {
+    matches!(cmd, "python" | "python3" | "python3.exe" | "python.exe" | "pip" | "pip3" | "py")
+}
+
+/// sill: a name as bash shows it in a diagnostic: as is, or `$'...'` when it holds a
+/// character that doesn't show, such as the CR of a script with Windows line endings
+/// (`$'pwd\r': command not found`) or a byte order mark.
+fn ansi_c_quoted(name: &str) -> String {
+    let hidden = |c: char| c.is_control() || c == '\u{feff}';
+    if !name.chars().any(hidden) {
+        return name.to_owned();
+    }
+    let mut out = String::from("$'");
+    for c in name.chars() {
+        match c {
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\x1b' => out.push_str("\\E"),
+            '\'' => out.push_str("\\'"),
+            '\\' => out.push_str("\\\\"),
+            c if hidden(c) => {
+                let mut buf = [0u8; 4];
+                for b in c.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("\\{b:03o}"));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+#[cfg(test)]
+mod quote_tests {
+    #[test]
+    fn hidden_characters_show() {
+        use super::ansi_c_quoted as q;
+        assert_eq!(q("pwd"), "pwd");
+        assert_eq!(q("pwd\r"), "$'pwd\\r'");
+        assert_eq!(q("\u{feff}echo"), "$'\\357\\273\\277echo'");
+        assert_eq!(q("中文"), "中文");
     }
 }
 
