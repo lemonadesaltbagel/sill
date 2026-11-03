@@ -746,6 +746,7 @@ impl Execute for ast::CompoundCommand {
                 // Handle errors within the subshell context to prevent fatal errors
                 // from propagating to the parent shell.
                 let result = list.execute(&mut subshell, params).await;
+                let result = subshell.finish_subshell(result, params).await;
                 Ok(shell.end_subshell(result, || Some(params.stderr(shell))))
             }
             Self::ForClause(f) => f.execute(shell, params).await,
@@ -2145,10 +2146,11 @@ fn setup_process_substitution(
     let subshell_cmd = subshell_cmd.to_owned();
     drop(sys::tasks::spawn_blocking(async move {
         // Intentionally ignore the result of the subshell command.
-        let _ = subshell_cmd
+        let result = subshell_cmd
             .list
             .execute(&mut subshell, &child_params)
             .await;
+        let _ = subshell.finish_subshell(result, &child_params).await;
     }));
 
     // Starting at 63 (a.k.a. 64-1)--and decrementing--look for an

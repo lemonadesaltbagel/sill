@@ -79,10 +79,12 @@ async fn cancelled_sourced_script_is_left() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelled_trap_handler_is_left() -> Result<()> {
     let mut shell = new_shell().await?;
+    let owner = shell.trap_owner();
     shell.traps_mut().register_handler(
         TrapSignal::Debug,
         format!("/bin/false; {BLOCK}"),
         brush_core::SourceInfo::default(),
+        owner,
     );
     shell.set_last_exit_status(7);
 

@@ -25,10 +25,11 @@ brush-core = { path = "../../third_party/brush/brush-core" }
 rmcp = { version = "3.7", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1"
 serde = { workspace = true }
+# Arguments a tool doesn't take (src/mcp.rs `unknown_arguments`).
+serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "fs", "io-std", "sync"] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The invisible console (src/lib.rs `console`); same version as brush-core's.

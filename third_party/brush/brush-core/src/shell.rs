@@ -120,6 +120,11 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     /// Clone depth from the original ancestor shell.
     depth: usize,
 
+    /// sill: this shell's id for trap ownership (0 for the top-level shell; each subshell
+    /// gets a new one), and the ids of the function calls it's in, innermost last.
+    shell_id: u64,
+    scope_ids: Vec<u64>,
+
     /// Shell name
     name: Option<String>,
 
@@ -166,6 +171,42 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     history: Option<crate::history::History>,
 }
 
+impl<SE: extensions::ShellExtensions> Shell<SE> {
+    /// sill: where a trap set now is set: this shell, and the function call it's in (or
+    /// the shell itself).
+    pub fn trap_owner(&self) -> crate::traps::TrapOwner {
+        crate::traps::TrapOwner {
+            shell: self.shell_id,
+            scope: self.current_scope_id(),
+        }
+    }
+
+    /// sill: the innermost function call this shell is in, or the shell itself.
+    pub(crate) fn current_scope_id(&self) -> u64 {
+        self.scope_ids.last().copied().unwrap_or(self.shell_id)
+    }
+
+    /// sill: this shell's id (see `trap_owner`).
+    pub(crate) const fn shell_id(&self) -> u64 {
+        self.shell_id
+    }
+
+    /// sill: records entering (`Some`) or leaving (`None`) a function call.
+    pub(crate) fn push_or_pop_scope_id(&mut self, enter: bool) {
+        if enter {
+            self.scope_ids.push(next_scope_id());
+        } else {
+            self.scope_ids.pop();
+        }
+    }
+}
+
+/// sill: a new id for a subshell or a function call (see `Shell::trap_owner`).
+fn next_scope_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
     fn clone(&self) -> Self {
         Self {
@@ -210,6 +251,8 @@ impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
             key_bindings: self.key_bindings.clone(),
             history: self.history.clone(),
             depth: self.depth + 1,
+            shell_id: next_scope_id(),
+            scope_ids: Vec::new(),
         }
     }
 }
@@ -427,6 +470,7 @@ impl<SE: extensions::ShellExtensions> ShellState for Shell<SE> {
     pub fn is_subshell(&self) -> bool {
         self.depth > 0
     }
+
 
     /// Returns the last "SECONDS" captured time.
     pub fn last_stopwatch_time(&self) -> std::time::SystemTime {

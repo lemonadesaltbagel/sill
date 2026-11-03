@@ -290,7 +290,8 @@ pub enum ErrorKind {
     HistoryNotEnabled,
 
     /// Expanding an unset variable.
-    #[error("expanding unset variable: {0}")]
+    /// sill: bash's words (`X: unbound variable`), which models know.
+    #[error("{0}: unbound variable")]
     ExpandingUnsetVariable(String),
 
     /// An internal error occurred.

@@ -117,6 +117,7 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
 
         self.call_stack.push_function(name, function, args);
         self.env.push_scope(env::EnvironmentScope::Local);
+        self.push_or_pop_scope_id(true);
         let leave = Leave::Function {
             frames: self.call_stack.depth(),
             scopes: self.env.scope_depth(),
@@ -281,6 +282,7 @@ impl<SE: crate::extensions::ShellExtensions> Drop for ShellGuard<'_, SE> {
         // popping something else.
         let left = match self.leave {
             Leave::Function { frames, scopes } => {
+                self.shell.push_or_pop_scope_id(false);
                 // Pop the frame and its scope together, or neither.
                 let left = self.frame_on_top(frames, callstack::FrameType::is_function)
                     && self.pop_scope(scopes, env::EnvironmentScope::Local);

@@ -332,7 +332,6 @@ cases:
       echo "back in parent"
 
   - name: "subshell can set its own EXIT trap"
-    known_failure: true # TODO(traps): EXIT trap in subshell
     stdin: |
       trap 'echo "[parent exit]"' EXIT
       echo "parent"
@@ -375,7 +374,6 @@ cases:
       echo "result: $result"
 
   - name: "command substitution can have its own EXIT trap"
-    known_failure: true # TODO: EXIT trap in command substitution subshell
     stdin: |
       trap 'echo "[parent exit]"' EXIT
       result=$(trap 'echo "[sub exit]"' EXIT; echo "inside")
@@ -429,7 +427,6 @@ cases:
       wait
 
   - name: "process substitution can set own EXIT trap"
-    known_failure: true # TODO: EXIT trap in process substitution
     stdin: |
       trap 'echo "[parent exit]"' EXIT
       cat <(trap 'echo "[sub exit]"' EXIT; echo "inside")
@@ -534,7 +531,6 @@ cases:
       echo "after func"
 
   - name: "RETURN trap - fires on sourced script completion"
-    known_failure: true # TODO(traps): RETURN trap not firing for sourced scripts
     test_files:
       - path: "sourced.sh"
         contents: |
@@ -559,7 +555,6 @@ cases:
       echo "done"
 
   - name: "RETURN trap - inherited with functrace"
-    known_failure: true # TODO(traps): RETURN trap inheritance with functrace not implemented
     stdin: |
       set -T
       trap 'echo "[return: ${FUNCNAME[0]:-main}]"' RETURN
@@ -912,7 +907,6 @@ cases:
       echo "status: $?"
 
   - name: "ERR trap set inside a function runs there"
-    known_failure: true # TODO(trap): an ERR trap set in a function body doesn't fire in it
     stdin: |
       f() { trap 'echo err' ERR; false; echo in-f; }
       f
@@ -927,13 +921,11 @@ cases:
       echo "second call: $?"
 
   - name: "ERR trap set inside a subshell runs there"
-    known_failure: true # TODO(trap): an ERR trap set in a subshell doesn't fire in it
     stdin: |
       (trap 'echo err' ERR; false; echo in-sub)
       echo after
 
   - name: "EXIT trap - exit in the handler sets a subshell's status"
-    known_failure: true # TODO(trap): a subshell ignores its EXIT trap's exit status
     stdin: |
       (trap 'exit 5' EXIT; true)
       echo "rc=$?"

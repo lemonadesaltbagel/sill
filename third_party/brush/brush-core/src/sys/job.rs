@@ -280,9 +280,7 @@ mod imp {
         use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
         let in_system32 = std::env::var_os("SystemRoot").is_some_and(|root| {
             let sys32 = std::path::Path::new(&root).join("System32");
-            exe.parent().is_some_and(|dir| {
-                dir.to_string_lossy().eq_ignore_ascii_case(&sys32.to_string_lossy())
-            })
+            exe.parent().is_some_and(|dir| same_dir(dir, &sys32))
         });
         if !in_system32 {
             return false;
@@ -305,6 +303,15 @@ mod imp {
             )
         };
         status != 0 || data == 0
+    }
+
+    /// Whether two directory paths are the same, whichever separators and case they use:
+    /// the shell finds programs through PATH entries in `C:/WINDOWS/system32` form.
+    pub(crate) fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+        let norm = |p: &std::path::Path| {
+            p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase()
+        };
+        norm(a) == norm(b)
     }
 
     /// Whether this process's standard output is a pipe (a harness reading it).
@@ -353,6 +360,14 @@ mod stub {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system32_in_either_separator() {
+        use std::path::Path;
+        assert!(same_dir(Path::new("C:/WINDOWS/system32"), Path::new(r"C:\Windows\System32")));
+        assert!(same_dir(Path::new(r"C:\Windows\System32\"), Path::new(r"c:\windows\system32")));
+        assert!(!same_dir(Path::new("C:/WINDOWS"), Path::new(r"C:\Windows\System32")));
+    }
 
     #[test]
     fn killing_the_job_ends_an_orphaned_grandchild() {

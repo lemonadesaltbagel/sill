@@ -1944,8 +1944,15 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
         if allow_unset_vars || !self.shell.options().treat_unset_variables_as_error {
             Ok(Expansion::undefined())
         } else {
-            let err: error::Error =
-                error::ErrorKind::ExpandingUnsetVariable(parameter.to_string()).into();
+            // sill: named as bash names it: `X`, `a[1]`, `$1`, not `${X}`.
+            let shown = parameter.to_string();
+            let inner = shown.strip_prefix("${").and_then(|s| s.strip_suffix('}')).unwrap_or(&shown);
+            let name = if inner.chars().all(|c| c.is_ascii_digit()) {
+                format!("${inner}")
+            } else {
+                inner.to_owned()
+            };
+            let err: error::Error = error::ErrorKind::ExpandingUnsetVariable(name).into();
             Err(err.into_fatal())
         }
     }

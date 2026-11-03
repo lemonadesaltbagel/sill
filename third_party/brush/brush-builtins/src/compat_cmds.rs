@@ -108,6 +108,18 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for CygpathCommand {
             }
             let path = std::path::Path::new(p);
             let mut mapped = brush_core::sys::fs::map_shell_path(path);
+            // A rooted path without a drive (`/tmp`) is on the current folder's drive:
+            // `\tmp` alone would mean another folder to a program running elsewhere.
+            if mapped.is_none()
+                && form != Form::Unix
+                && p.starts_with(['/', '\\'])
+                && !p.starts_with("//")
+                && !p.starts_with("\\\\")
+            {
+                mapped = Some(std::path::PathBuf::from(brush_core::sys::fs::display_path(
+                    &context.shell.absolute_path(path),
+                )));
+            }
             if self.absolute {
                 let abs = context
                     .shell

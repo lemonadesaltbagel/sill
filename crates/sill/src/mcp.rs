@@ -66,9 +66,9 @@ watchers with `run_in_background`, read them with `bash_output`, stop them with 
 
 /// The `bash` tool's description; `{tools}` is what [`tools_here`] says.
 const BASH_DESCRIPTION: &str = "\
-Run a command in Bash on this Windows machine (sill, native Bash: {tools}, apply_patch). Use it instead of PowerShell or cmd for shell work. \
-Returns stdout, stderr and the exit code. The working directory, exported variables, functions \
-and aliases carry over to the next call. Stopped after `timeout_ms` (default 120000, at most 600000) with every \
+Run a command in Bash on this Windows machine (sill, native Bash with apply_patch, {tools}). Use it instead of PowerShell or cmd for shell work. \
+Returns stdout, stderr and the exit code. The working directory, exported variables, functions, \
+aliases and options carry over to the next call. Stopped after `timeout_ms` (default 120000, at most 600000) with every \
 program it started; for a server or anything long-running, set `run_in_background` to get a \
 job id at once.";
 
@@ -119,12 +119,46 @@ pub struct BashArgs {
     /// The command, in Bash.
     pub command: String,
     /// Milliseconds before the command is stopped (default 120000, at most 600000).
-    #[serde(default = "default_timeout")]
+    /// (`timeout`, the name in Claude Code's own Bash tool, is taken too: it was ignored,
+    /// and `sleep 30` ran its 30 s.)
+    #[serde(default = "default_timeout", alias = "timeout")]
     #[schemars(default = "default_timeout", with = "i64")]
     pub timeout_ms: u64,
     /// Start the command as a background job and return its id at once.
     #[serde(default)]
     pub run_in_background: bool,
+    /// Anything else the model sent, refused by name (see [`unknown_arguments`]).
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub other: HashMap<String, serde_json::Value>,
+}
+
+/// An error for arguments `bash` doesn't take, so a misspelt one isn't silently dropped;
+/// `description` (Claude Code's Bash tool has it) is fine.
+fn unknown_arguments(other: &HashMap<String, serde_json::Value>) -> Option<CallToolResult> {
+    let mut names: Vec<&str> = other.keys().map(String::as_str).filter(|k| *k != "description").collect();
+    if names.is_empty() {
+        return None;
+    }
+    names.sort_unstable();
+    Some(CallToolResult::error(vec![ContentBlock::text(format!(
+        "unknown argument(s) {}; `bash` takes command, timeout_ms (milliseconds) and run_in_background",
+        names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+    ))]))
+}
+
+/// A job id given as a number or as a string of one (`"3"`), as models often send it.
+fn job_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        N(u32),
+        S(String),
+    }
+    match Id::deserialize(d)? {
+        Id::N(n) => Ok(n),
+        Id::S(s) => s.trim().trim_start_matches('%').parse().map_err(serde::de::Error::custom),
+    }
 }
 
 fn default_timeout() -> u64 {
@@ -135,6 +169,7 @@ fn default_timeout() -> u64 {
 #[derive(Deserialize, JsonSchema)]
 pub struct OutputArgs {
     /// The job id `bash` returned.
+    #[serde(deserialize_with = "job_id")]
     #[schemars(with = "i64")]
     pub id: u32,
     /// Wait up to this many milliseconds for new output or for the job to end (default 0,
@@ -148,6 +183,7 @@ pub struct OutputArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct KillArgs {
     /// The job id `bash` returned.
+    #[serde(deserialize_with = "job_id")]
     #[schemars(with = "i64")]
     pub id: u32,
 }
@@ -185,6 +221,8 @@ pub struct Server {
     session: Arc<tokio::sync::Mutex<Session>>,
     jobs: Arc<std::sync::Mutex<HashMap<u32, Job>>>,
     next: Arc<AtomicU32>,
+    /// Background job ids, counted apart from commands so the first job is 1.
+    next_job: Arc<AtomicU32>,
     tool_router: ToolRouter<Self>,
     instructions: String,
 }
@@ -246,6 +284,7 @@ impl Server {
             session: Arc::new(tokio::sync::Mutex::new(Session { cwd, env, state: String::new(), cwd_settled, note: None })),
             jobs: Arc::default(),
             next: Arc::new(AtomicU32::new(1)),
+            next_job: Arc::new(AtomicU32::new(1)),
             tool_router,
             instructions: INSTRUCTIONS.replace("{tools}", &tools),
         })
@@ -261,6 +300,9 @@ impl Server {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let args = params.0;
+        if let Some(refused) = unknown_arguments(&args.other) {
+            return Ok(refused);
+        }
         self.settle_cwd(&ctx).await;
         if args.run_in_background {
             return self.start_job(&args.command).await.map_err(io_error);
@@ -310,6 +352,8 @@ impl Server {
         let err = std::fs::read(&files.err).unwrap_or_default();
         let (out, out_cut) = shape(&out, &files.out);
         let (err, err_cut) = shape(&err, &files.err);
+        // A syntax error names the file the command was sourced from; it's the server's.
+        let err = err.replace(&format!("{}: ", display(&files.cmd)), "");
         let footer = match ended {
             Ended::Exited(code) => format!(
                 "exit {} · cwd {} · {secs:.1} s",
@@ -317,7 +361,7 @@ impl Server {
                 display(&session.cwd)
             ),
             Ended::TimedOut => format!(
-                "stopped after {:.0} s (timeout_ms {}), with the programs it started; for \
+                "stopped after {:.1} s (timeout_ms {}), with the programs it started; for \
                  something long-running use run_in_background",
                 secs, args.timeout_ms
             ),
@@ -328,7 +372,7 @@ impl Server {
         // Programs the command left running become a background job of the session.
         let left = if matches!(ended, Ended::Exited(_)) { tree.remaining() } else { 0 };
         if left > 0 {
-            let id = self.next.fetch_add(1, Ordering::Relaxed);
+            let id = self.next_job.fetch_add(1, Ordering::Relaxed);
             let read = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
             let job = Job {
                 child: None,
@@ -469,10 +513,11 @@ impl Server {
             out_pos: 0,
             err_pos: 0,
         };
-        self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(n, job);
+        let id = self.next_job.fetch_add(1, Ordering::Relaxed);
+        self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id, job);
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{note}started background job {n} (pid {pid}) in {}; read its output with bash_output \
-             (id {n}), stop it with bash_kill",
+            "{note}started background job {id} (pid {pid}) in {}; read its output with bash_output \
+             (id {id}), stop it with bash_kill",
             display(&session.cwd)
         ))]))
     }
@@ -1045,7 +1090,11 @@ mod tests {
             text,
             "grep, sed, awk, find, make, rg, jq, git, node; not installed: npm, python, uv, cargo, go, java, dotnet, docker"
         );
-        assert!(!BASH_DESCRIPTION.replace("{tools}", &text).contains("{tools}"));
+        let described = BASH_DESCRIPTION.replace("{tools}", &text);
+        assert!(!described.contains("{tools}"));
+        // apply_patch is sill's own, never among the missing ones.
+        let missing = described.split("not installed:").nth(1).unwrap_or("");
+        assert!(!missing.split(')').next().unwrap_or("").contains("apply_patch"), "{described}");
         assert!(INSTRUCTIONS.contains("{tools}"));
     }
 

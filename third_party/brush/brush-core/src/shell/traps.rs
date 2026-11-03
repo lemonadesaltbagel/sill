@@ -69,17 +69,26 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
             return Ok(ExecutionResult::success());
         }
 
-        // In functions and subshells, some traps are only inherited when the
-        // corresponding option is enabled.
-        if (self.in_function() || self.is_subshell())
-            && !self.is_trap_inherited_in_current_scope(signal)
-        {
-            return Ok(ExecutionResult::success());
-        }
-
         let Some(handler) = self.traps.get_handler(signal).cloned() else {
             return Ok(ExecutionResult::success());
         };
+
+        // sill: a subshell runs its own EXIT trap, never its parent's (whose handler it has
+        // a copy of).
+        if signal == TrapSignal::Exit && handler.owner.shell != self.shell_id() {
+            return Ok(ExecutionResult::success());
+        }
+
+        // In functions and subshells, some traps are only inherited when the
+        // corresponding option is enabled. sill: a trap set in this very function call or
+        // subshell isn't inherited, it's its own: `f() { trap '...' RETURN; ...; }` and
+        // `( trap '...' ERR; false )` run theirs, as in bash.
+        if (self.in_function() || self.is_subshell())
+            && !self.is_trap_inherited_in_current_scope(signal)
+            && handler.owner.scope != self.current_scope_id()
+        {
+            return Ok(ExecutionResult::success());
+        }
 
         let mut params = params.clone();
         params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
@@ -88,6 +97,43 @@ impl<SE: crate::extensions::ShellExtensions> crate::Shell<SE> {
         self.enter_trap_handler(signal, Some(&handler))
             .run_string(&handler.command, &handler.source_info, &params)
             .await
+    }
+
+    /// sill: ends a subshell (`( ... )`, `$(...)`, `<(...)`) as bash does: with the EXIT
+    /// trap it set, if any, run with its standard streams (so a `$(...)` captures the trap's
+    /// output too). `( tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; ... )` left the folder
+    /// behind. An `exit` in the trap sets the status.
+    pub(crate) async fn finish_subshell(
+        &mut self,
+        result: Result<ExecutionResult, error::Error>,
+        params: &ExecutionParameters,
+    ) -> Result<ExecutionResult, error::Error> {
+        let own_exit_trap = self
+            .traps
+            .get_handler(TrapSignal::Exit)
+            .is_some_and(|h| h.owner.shell == self.shell_id());
+        if !self.is_subshell() || !own_exit_trap {
+            return result;
+        }
+        if let Ok(r) = &result {
+            self.set_last_exit_status(r.exit_code.into());
+        }
+        match self.invoke_trap_handler(TrapSignal::Exit, params).await {
+            Ok(trap_result) if trap_result.is_exit() => Ok(ExecutionResult::from(trap_result.exit_code)),
+            _ => result,
+        }
+    }
+
+    /// sill: runs the RETURN trap as a function call or a sourced script ends (before its
+    /// frame is left), with `$?` its status.
+    pub(crate) async fn run_return_trap(&mut self, status: Option<u8>, params: &ExecutionParameters) {
+        if !self.traps.handles(TrapSignal::Return) {
+            return;
+        }
+        if let Some(status) = status {
+            self.set_last_exit_status(status);
+        }
+        let _ = self.invoke_trap_handler(TrapSignal::Return, params).await;
     }
 
     /// Returns whether the given trap signal is inherited in the current
