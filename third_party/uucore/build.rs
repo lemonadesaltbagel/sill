@@ -281,6 +281,27 @@ fn embed_static_utility_locales(
         Path::new(&manifest_dir).join(format!("locales/errors/{locale}.ftl"))
     })?;
 
+    // sill: utilities vendored beside this uucore (third_party/uu_ls, patched in through
+    // [patch.crates-io]) first: the registry has no copy of a patched crate, and its
+    // messages were left out (`ls: ls-error-cannot-access-no-such-file`).
+    let mut embedded = std::collections::HashSet::new();
+    if let Some(third_party) = Path::new(&manifest_dir).parent() {
+        let mut vendored: Vec<_> = std::fs::read_dir(third_party)?.filter_map(Result::ok).collect();
+        vendored.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in vendored {
+            let file_name = entry.file_name();
+            if let Some(util_name) = file_name.to_str().and_then(|n| n.strip_prefix("uu_"))
+                && entry.path().join("locales").is_dir()
+            {
+                println!("cargo:rerun-if-changed={}", entry.path().join("locales").display());
+                embed_component_locales(embedded_file, locales_to_embed, util_name, |locale| {
+                    entry.path().join(format!("locales/{locale}.ftl"))
+                })?;
+                embedded.insert(util_name.to_owned());
+            }
+        }
+    }
+
     // Collect and sort for deterministic builds
     let mut entries: Vec<_> = std::fs::read_dir(registry_dir)?
         .filter_map(Result::ok)
@@ -294,7 +315,8 @@ fn embed_static_utility_locales(
             dir_name.ends_with(&format!("-{}", env::var("CARGO_PKG_VERSION").unwrap_or_default())) &&
             // Match uu_<util>-<version>
             let Some((util_part, _)) = dir_name.split_once('-') &&
-                let Some(util_name) = util_part.strip_prefix("uu_")
+                let Some(util_name) = util_part.strip_prefix("uu_") &&
+                !embedded.contains(util_name)
         {
             embed_component_locales(embedded_file, locales_to_embed, util_name, |locale| {
                 entry.path().join(format!("locales/{locale}.ftl"))
