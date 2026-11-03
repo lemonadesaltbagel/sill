@@ -91,7 +91,8 @@ check "diff <(...) <(...) (named pipes)" "2" "$(diff <(printf 'a\n') <(printf 'b
 check "cmp <(...) <(...)" "same" "$(cmp <(echo x) <(echo x) && echo same)"
 check "diff -r --exclude (GNU diffutils)" "0" "$(mkdir -p dA dB && echo s > dA/k && echo s > dB/k && echo 1 > dA/STAMP && diff -r --exclude=STAMP dA dB >/dev/null; echo $?)"
 check "OSTYPE" "msys" "$OSTYPE"
-check "uname -s" "Windows_NT" "$(uname -s)"
+check "uname -s (as Git Bash: MINGW64_NT-<version>)" "MINGW64_NT" "$(uname -s | cut -d- -f1)"
+check "uname -o" "Msys" "$(uname -o)"
 
 cd / && rm -rf "$work"
 echo "dist-check: $fails failure(s)"
