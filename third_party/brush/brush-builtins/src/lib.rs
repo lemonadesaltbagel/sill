@@ -93,6 +93,9 @@ mod procs;
 // sill: chmod on Windows (the read-only attribute); compiled everywhere for its tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod chmod_windows;
+// sill: uname as Git Bash answers it; compiled everywhere for its tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod uname_windows;
 // sill: which on Windows, from the shell's lookup.
 #[cfg(windows)]
 mod which_windows;

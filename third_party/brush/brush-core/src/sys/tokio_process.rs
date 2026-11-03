@@ -182,8 +182,11 @@ fn shebang_launch(mut command: LaunchRequest) -> std::io::Result<LaunchRequest> 
         }
     };
     let Some(interpreter) = interpreter else {
+        // sill: with how to install it, as "command not found" says.
+        let hint = crate::install_hints::install_hint(shebang::interpreter_name(&sb.interpreter))
+            .map_or_else(String::new, |h| format!(" ({h})"));
         return Err(std::io::Error::other(format!(
-            "{}: bad interpreter: No such file or directory",
+            "{}: bad interpreter: No such file or directory{hint}",
             sb.interpreter
         )));
     };

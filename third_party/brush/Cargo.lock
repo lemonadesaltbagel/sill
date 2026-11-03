@@ -5062,8 +5062,6 @@ dependencies = [
 [[package]]
 name = "uu_ls"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd8f956231b30edd22f1c0ef803d6928da0d7cb5f07add01a4d15e5b2d4a2540"
 dependencies = [
  "ansi-width",
  "clap",

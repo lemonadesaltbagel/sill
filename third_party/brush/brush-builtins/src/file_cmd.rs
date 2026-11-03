@@ -120,6 +120,21 @@ fn script(first_line: &str) -> Kind {
     kind(desc, mime)
 }
 
+/// sill: text in the system's code page where that's a Chinese, Japanese or Korean one,
+/// which file(1) would call ISO-8859: `GBK text` on a code-page-936 machine says which
+/// encoding to convert from (`iconv -f GBK`).
+fn legacy_cjk(b: &[u8]) -> Option<(&'static str, &'static str)> {
+    let cp = brush_core::text::system_ansi_code_page()?;
+    let named = match cp {
+        936 => ("GBK text (code page 936)", "gbk"),
+        950 => ("Big5 text (code page 950)", "big5"),
+        932 => ("Shift_JIS text (code page 932)", "shift_jis"),
+        949 => ("EUC-KR text (code page 949)", "euc-kr"),
+        _ => return None,
+    };
+    brush_core::text::from_code_page(b, cp).map(|_| named)
+}
+
 /// Text: encoding and line terminators, as file words them.
 fn text(b: &[u8]) -> Option<Kind> {
     let (body, enc, charset) = if let Some(rest) = b.strip_prefix(b"\xef\xbb\xbf") {
@@ -144,6 +159,8 @@ fn text(b: &[u8]) -> Option<Kind> {
             || std::str::from_utf8(&b[..b.len().saturating_sub(3)]).is_ok()
         {
             (b, "Unicode text, UTF-8 text", "utf-8")
+        } else if let Some((name, charset)) = legacy_cjk(b) {
+            (b, name, charset)
         } else {
             (b, "ISO-8859 text", "iso-8859-1")
         }

@@ -92,7 +92,7 @@ pub enum TokenizerError {
     UnterminatedEscapeSequence,
 
     /// An unterminated single-quoted substring was encountered at the end of the input stream.
-    #[error("unterminated single quote at {0}")]
+    #[error("unexpected EOF while looking for matching `''")]
     UnterminatedSingleQuote(SourcePosition),
 
     /// An unterminated ANSI C-quoted substring was encountered at the end of the input stream.
@@ -100,11 +100,11 @@ pub enum TokenizerError {
     UnterminatedAnsiCQuote(SourcePosition),
 
     /// An unterminated double-quoted substring was encountered at the end of the input stream.
-    #[error("unterminated double quote at {0}")]
+    #[error("unexpected EOF while looking for matching `\"'")]
     UnterminatedDoubleQuote(SourcePosition),
 
     /// An unterminated back-quoted substring was encountered at the end of the input stream.
-    #[error("unterminated backquote near {0}")]
+    #[error("unexpected EOF while looking for matching ``'")]
     UnterminatedBackquote(SourcePosition),
 
     /// An unterminated extended glob (extglob) pattern was encountered at the end of the input

@@ -129,12 +129,16 @@ The installer changes nothing else. sill itself creates one folder: `\tmp` on th
 | Codex CLI, Gemini CLI, Claude Desktop | As an MCP server: `-Mcp codex,gemini,claude` |
 | any MCP client | Command `...\sill\bash.exe`, arguments `--mcp` (stdio). Allow tool calls up to 11 minutes |
 
+A harness that can only start programs from Windows PowerShell 5.1 should use the MCP server or a script file (`bash.exe script.sh`), not `bash.exe -c '...'` with quotes in the command: PowerShell 5.1 drops the inner double quotes when it builds the command line, so `& bash.exe -c 'printf "[%s]\n" "a b"'` prints `[a]n`.
+
 ### The MCP server
 
 `bash.exe --mcp` gives the model three tools:
 - `bash` runs a command and returns its stdout, stderr and exit code. The working directory, exported variables, functions, aliases and options carry over to the next call (not `set -e`, and not unexported variables), however the command ends, its own `trap ... EXIT` included. A timeout (default 2 minutes, at most 10) ends the command and every program it started. With `run_in_background`, it starts a server or watcher and returns a job id at once.
 - `bash_output` reads a background job's new output.
 - `bash_kill` stops a background job and everything it started.
+
+Commands run one at a time. Calls a client makes in parallel run in no set order, so a `cd` or `export` in one of them may or may not be in effect for the other; chain commands that depend on each other in one call.
 
 Each command runs in a fresh sill process, inside a Job Object it joins before it starts. So a crash or a hang can't take the server down, and a timeout or `bash_kill` ends every program the command started. Programs a command leaves running become a background job: the result says so, `bash_output` and `bash_kill` work on them, and they end with the session.
 
@@ -169,7 +173,7 @@ Output is read as UTF-8; a line that isn't is read in the system's ANSI code pag
 
 **Bundled tools (all native Windows programs):**
 - **Built into sill:** the coreutils (uutils) and `find` (uutils findutils, printing `/` paths, also for `-exec`).
-- **GNU builds:** grep, sed, diffutils and make, with a UTF-8 code page, so any file name works.
+- **GNU builds:** grep, sed, diffutils and make, with a UTF-8 code page, so any file name works (including names whose 8.3 short name is long in UTF-8, such as `文件 ü.txt`, which the C runtime's directory listing otherwise fails on).
 - **Others:** ripgrep, jq, and busybox-w32 for awk, xargs, patch, gzip and the rest.
 - **For Windows:** `ps`, `pgrep`, `pkill`, `killall`, `kill`, `lsof` (files and ports), `file`, `cygpath`, `nohup` and `setsid`.
 
