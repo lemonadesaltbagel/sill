@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+Fixes from an agent's run of 0.6.2 on a Chinese-locale Windows 11 (code page 936), with a space in the user name and no Git, Node or Python.
+
+### Fixes
+- **`make`, `grep -r` and `diff -r` stopped with "Invalid argument"** in a folder holding a file such as `文件 ü.txt`: in the tools' UTF-8 code page, Windows' ANSI directory listing fails on a file whose 8.3 short name (`文件Ü~1.TXT`) is longer than 14 bytes in UTF-8. The GNU tools list directories with the wide functions now (`third_party/gnu-tools/findfile.c`).
+- **No install hint for a missing `git` or `node`** (Python had one): Git, Node.js (`node`, `npm`, `npx`), Python, Rust, Go, Java, .NET, Docker and uv say which `winget install` gets them, for a command and for a `#!` interpreter.
+- **`uname -s` said `Windows_NT`**, which matched none of the `MINGW*|MSYS*` branches scripts use while `$OSTYPE` is `msys`: it's `MINGW64_NT-10.0-<build>`, and `uname -o` `Msys`, as in Git Bash.
+- **`$TMPDIR` had 8.3 short names** (`C:/Users/JANEDO~1/...`) where `$HOME` didn't; it's spelled out, and so are the MCP server's paths.
+- **Syntax errors** say what bash says (`unexpected EOF while looking for matching '"'`, `syntax error: unexpected end of file`), without `at 1,6 (detected near line 1 col 19)`.
+- **`stat`** is bundled (busybox's): `stat -c %s FILE`, `stat -c %Y FILE`.
+- **`file` on a code-page-936 machine** calls GBK text `GBK text (code page 936)`, not `ISO-8859 text` (likewise Big5, Shift_JIS, EUC-KR).
+- **`ls -l`** showed `somebody somegroup` and a `total` in bytes: it shows your user name (and `None` for the group, as Git Bash) and 1 KiB blocks.
+
+### MCP server
+- **A syntax error's line** counted from the server's wrapper (`line 4` for a one-line command).
+- **`bash_output` and `bash_kill`** take `job_id`, `bash_id` and `shell_id` for `id`.
+
+### Docs
+- **PowerShell-only harnesses:** use the MCP server or a script file, not `bash.exe -c '...'` with quotes (PowerShell 5.1 drops them). **Parallel MCP calls** run one at a time in no set order.
+
+### Checks
+- **Conformance:** GNU tools in a folder of such names, `uname`, `stat`, `$TMPDIR`, install hints, syntax-error wording (108 cases).
+
 ## 0.6.2 (2026-11-03)
 
 Fixes from an agent's run of 0.6.1 (Claude in Claude Code's desktop app, English Windows 11, a space in the user name, no Git, Node or Python).

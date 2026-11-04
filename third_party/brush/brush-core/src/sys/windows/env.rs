@@ -61,11 +61,13 @@ where
         *path = crate::sys::fs::posix_path_list(path);
     }
 
-    // Copy TEMP/TMP to TMPDIR if TMPDIR doesn't already exist.
+    // Copy TEMP/TMP to TMPDIR if TMPDIR doesn't already exist. sill: with short names
+    // spelled out: Windows gives TEMP as `C:\Users\JANEDO~1\...` when the user name has a
+    // space, while HOME and the working folder are long, so the same folder had two names.
     if !vars.contains_key("TMPDIR")
         && let Some(tmp) = vars.get("TEMP").or_else(|| vars.get("TMP")).cloned()
     {
-        vars.insert("TMPDIR".to_string(), tmp);
+        vars.insert("TMPDIR".to_string(), crate::sys::fs::long_path(&tmp));
     }
 
     // sill: HOME and TMPDIR with `/` separators, as $PWD has them: `~/x` and `$TMPDIR/x`

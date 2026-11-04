@@ -230,6 +230,11 @@ pub const fn map_shell_path(_path: &Path) -> Option<std::path::PathBuf> {
     None
 }
 
+/// sill: Windows' short names spelled out; nothing to do here.
+pub fn long_path(path: &str) -> String {
+    path.to_owned()
+}
+
 /// sill: renders a path the way the shell shows it.
 pub fn display_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()

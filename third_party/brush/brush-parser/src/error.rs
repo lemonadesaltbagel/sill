@@ -7,12 +7,14 @@ pub enum ParseError {
     #[error("syntax error at line {} col {}", .0.line, .0.column)]
     ParsingNear(crate::SourcePosition),
 
-    /// A parsing error occurred at the end of the input.
-    #[error("syntax error at end of input")]
+    /// A parsing error occurred at the end of the input. (sill: in bash's words.)
+    #[error("syntax error: unexpected end of file")]
     ParsingAtEndOfInput,
 
     /// An error occurred while tokenizing the input stream.
-    #[error("{} (detected near {})", .inner, .position.as_ref().map_or_else(|| String::from("<unknown position>"), |p| std::format!("line {} col {}", p.line, p.column)))]
+    /// (sill: without the positions, `at 1,6 (detected near line 1 col 19)`, which the
+    /// diagnostic's `line N:` gives; as bash words it.)
+    #[error("{}", .inner)]
     Tokenizing {
         /// The inner error.
         inner: tokenizer::TokenizerError,

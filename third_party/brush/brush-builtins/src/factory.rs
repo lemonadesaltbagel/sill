@@ -187,6 +187,9 @@ pub fn default_builtins<SE: brush_core::ShellExtensions>(
     // sill: Windows has no chmod; see chmod_windows.rs.
     #[cfg(windows)]
     m.insert("chmod".into(), builtins::Registration::of::<chmod_windows::ChmodCommand>());
+    // sill: `uname` as Git Bash answers it; see uname_windows.rs.
+    #[cfg(windows)]
+    m.insert("uname".into(), builtins::Registration::of::<uname_windows::UnameCommand>());
     // sill: `which` from the shell's own lookup; see which_windows.rs.
     #[cfg(windows)]
     m.insert("which".into(), builtins::Registration::of::<which_windows::WhichCommand>());

@@ -25,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 $Applets = @(
     'grep', 'egrep', 'fgrep', 'sed', 'awk', 'find', 'xargs', 'diff', 'patch',
     'which', 'timeout', 'hexdump', 'xxd', 'strings', 'bc', 'iconv',
-    'dos2unix', 'unix2dos', 'unzip', 'gzip', 'gunzip', 'zcat', 'bzip2', 'xz', 'unxz'
+    'dos2unix', 'unix2dos', 'unzip', 'gzip', 'gunzip', 'zcat', 'bzip2', 'xz', 'unxz', 'stat'
 )
 # Coreutils are built into sill, but programs that start other programs (find -exec,
 # xargs, make, Python's subprocess, ...) look them up on PATH, where Windows has none,

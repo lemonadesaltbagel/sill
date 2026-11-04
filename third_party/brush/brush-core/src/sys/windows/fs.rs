@@ -372,6 +372,25 @@ pub fn map_shell_path(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// sill: `path` with its 8.3 short names spelled out (`C:/Users/JANEDO~1/...` is
+/// `C:/Users/Jane Doe/...`), as the rest of the shell shows paths; as it is if that
+/// fails (it doesn't exist).
+pub fn long_path(path: &str) -> String {
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+    if !path.contains('~') {
+        return path.to_owned();
+    }
+    let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+    let mut buf = vec![0u16; 32768];
+    // SAFETY: both buffers are valid; the output's size is passed.
+    let n = unsafe { GetLongPathNameW(wide.as_ptr(), buf.as_mut_ptr(), u32::try_from(buf.len()).unwrap_or(0)) };
+    let n = usize::try_from(n).unwrap_or(0);
+    if n == 0 || n >= buf.len() {
+        return path.to_owned();
+    }
+    String::from_utf16_lossy(&buf[..n])
+}
+
 /// sill: renders a path the way the shell shows it: no verbatim prefix (`\\?\`, which
 /// `canonicalize` adds) and `/` separators, since `\` is the shell's escape character.
 /// `\\?\C:\x` becomes `C:/x`; `\\?\UNC\srv\share` becomes `//srv/share`.

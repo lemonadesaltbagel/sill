@@ -169,7 +169,7 @@ fn default_timeout() -> u64 {
 #[derive(Deserialize, JsonSchema)]
 pub struct OutputArgs {
     /// The job id `bash` returned.
-    #[serde(deserialize_with = "job_id")]
+    #[serde(deserialize_with = "job_id", alias = "job_id", alias = "bash_id", alias = "shell_id")]
     #[schemars(with = "i64")]
     pub id: u32,
     /// Wait up to this many milliseconds for new output or for the job to end (default 0,
@@ -183,7 +183,7 @@ pub struct OutputArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct KillArgs {
     /// The job id `bash` returned.
-    #[serde(deserialize_with = "job_id")]
+    #[serde(deserialize_with = "job_id", alias = "job_id", alias = "bash_id", alias = "shell_id")]
     #[schemars(with = "i64")]
     pub id: u32,
 }
@@ -265,7 +265,10 @@ pub(crate) fn serve() -> ! {
 impl Server {
     fn new() -> std::io::Result<Self> {
         let shell = std::env::current_exe()?;
-        let dir = std::env::temp_dir().join("sill-mcp").join(std::process::id().to_string());
+        // With short names spelled out (TEMP is `C:\Users\JANEDO~1\...` for a user name
+        // with a space), as the paths in results are.
+        let temp = PathBuf::from(brush_core::sys::fs::long_path(&std::env::temp_dir().to_string_lossy()));
+        let dir = temp.join("sill-mcp").join(std::process::id().to_string());
         std::fs::create_dir_all(&dir)?;
         let root = std::env::var_os("SILL_MCP_ROOT").map(PathBuf::from).filter(|d| d.is_dir());
         let cwd_settled = root.is_some();
@@ -640,8 +643,9 @@ fn wrapper(files: &Files) -> String {
     // The command runs through `eval`, as Claude Code's own Bash tool runs it, not `.`:
     // a sourced file's end runs the RETURN trap, so a trap a command set fired after every
     // later command.
+    // One line, so the command's line numbers are its own (`line 1`, not the wrapper's 4).
     format!(
-        ". {restore} 2>/dev/null\nset +o errexit\nshopt -s expand_aliases\neval \"$(< {cmd})\"\n",
+        ". {restore} 2>/dev/null; set +o errexit; shopt -s expand_aliases; eval \"$(< {cmd})\"",
         restore = single_quote(&display(&files.restore)),
         cmd = single_quote(&display(&files.cmd)),
     )

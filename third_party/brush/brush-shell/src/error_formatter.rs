@@ -28,12 +28,16 @@ impl brush_core::extensions::ErrorFormatter for Formatter {
             }
             brush_core::error::ErrorKind::CommandNotFound(cmd) => {
                 let shown = ansi_c_quoted(cmd);
-                let hint = if is_python(cmd) && shell.find_first_executable_in_path("python").is_none() {
-                    // sill: no `python` either (the Store's stand-in doesn't count).
-                    Some("Python isn't installed here; `winget install -e --id Python.Python.3.13` installs it")
-                        .filter(|_| cfg!(windows))
+                // sill: a program agents expect that isn't installed says how to get it;
+                // `python3` where `python` exists says to use that (the Store's stand-in
+                // doesn't count as Python).
+                let python_here = is_python(cmd) && shell.find_first_executable_in_path("python").is_some();
+                let hint = if python_here {
+                    unsupported_hint(cmd).map(str::to_owned)
                 } else {
-                    unsupported_hint(cmd)
+                    brush_core::install_hints::install_hint(cmd)
+                        .filter(|_| cfg!(windows))
+                        .or_else(|| unsupported_hint(cmd).map(str::to_owned))
                 };
                 match hint {
                     Some(hint) => format!("{shown}: command not found ({hint})"),
@@ -124,7 +128,6 @@ fn unsupported_hint(cmd: &str) -> Option<&'static str> {
         "id" => "no uids on Windows; `whoami` (and `whoami /groups` for admin rights)",
         "free" | "uptime" | "lscpu" => "use `systeminfo` (or pwsh `Get-CimInstance Win32_OperatingSystem`)",
         "top" | "htop" | "watch" => "interactive; for a snapshot use `ps aux` (or `tasklist`)",
-        "stat" => "not bundled; size: `wc -c < FILE`; times: `date -r FILE`; details: `ls -l FILE`",
         "perl" => "not bundled; for in-place edits `sed -i 's/a/b/' FILE` (GNU sed, keeps CRLF), else `python -c`",
         "ss" | "fuser" => "use `lsof -i :PORT` (or `lsof FILE`); `lsof -t` prints just the PIDs",
         "killall" | "pkill" => "use `taskkill /IM <name>.exe /F` (add /T for the whole tree)",

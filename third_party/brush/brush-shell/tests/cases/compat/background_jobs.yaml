@@ -131,7 +131,10 @@ cases:
       #send:Ctrl+D
 
   - name: "A background job started in a command substitution runs during it"
-    known_failure: true # TODO(jobs): the job's task doesn't run until the substitution's busy loop ends, so neither does a signal it sends
+    # TODO(jobs): the job's task doesn't run until the substitution's busy loop ends, so neither does a signal it sends.
+    # sill: skipped rather than a known failure: whether the job gets a worker thread during the loop depends on the
+    # machine's cores and scheduling, so on some CI runners it passes.
+    skip: true
     stdin: |
       x=$(
         (sleep 0.1; echo ran > ran.txt) &

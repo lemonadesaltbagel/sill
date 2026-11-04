@@ -39,6 +39,8 @@ pub mod terminal;
 pub mod tests;
 /// sill: bytes from programs as text.
 pub mod text;
+/// sill: how to install a missing program.
+pub mod install_hints;
 pub mod timing;
 pub mod trace_categories;
 pub mod traps;

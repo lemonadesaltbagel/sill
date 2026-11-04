@@ -135,6 +135,13 @@ CASES = [
      "why": "`while read` over a file with bytes that aren't UTF-8 reads every line.",
      "files": {"f": b"a\n\xff\xfe\nb\n"},
      "script": "n=0; while read -r l; do n=$((n+1)); done < f; echo $n", "expect": "3\n"},
+    {"id": "enc-gnu-tools-short-names", "cat": "encoding",
+     "why": "make, `grep -r` and `diff -r` read a folder holding names whose 8.3 short name is long in UTF-8 "
+            "(`文件 ü.txt`), instead of stopping with \"Invalid argument\".",
+     "files": {"文件 ü.txt": "x\n", "ファイル ü.txt": "x\n", "文件 €.txt": "x\n", "Makefile": "all:\n\t@echo made\n"},
+     "script": "make && grep -rl x . && diff -rq . . && echo same",
+     "check": lambda o, e, c, s: c == 0 and text(o).startswith("made\n") and text(o).endswith("same\n")
+                                 and all(n in text(o) for n in ["文件 ü.txt", "ファイル ü.txt", "文件 €.txt"])},
 
     # --- line endings: bytes in, bytes out ---------------------------------------------------------
     {"id": "crlf-sed-keeps", "cat": "crlf", "why": "`sed -i` on a CRLF file keeps CRLF (GNU sed on Linux does).",
@@ -388,6 +395,24 @@ CASES = [
     {"id": "errors-unbound-variable", "cat": "errors", "why": "`set -u` says `X: unbound variable`, bash's words.",
      "script": "set -u; echo $NOPE_XYZ",
      "check": lambda o, e, c, s: b"NOPE_XYZ: unbound variable" in e and c != 0},
+    {"id": "tools-uname-like-git-bash", "cat": "tools",
+     "why": "`uname -s` is `MINGW64_NT-...` and `uname -o` is `Msys`, as in Git Bash, so `case $(uname -s) in MINGW*|MSYS*)` "
+            "branches match, as `$OSTYPE` (msys) does.",
+     "script": "uname -s; uname -o",
+     "check": lambda o, e, c, s: text(o).split("\n")[0].startswith(("MINGW64_NT", "MSYS_NT")) and "Msys" in text(o)},
+    {"id": "tools-stat", "cat": "tools", "why": "`stat -c %s FILE` gives the size.",
+     "script": "printf abc > f; stat -c %s f", "expect": "3\n"},
+    {"id": "paths-tmpdir-long", "cat": "paths",
+     "why": "`$TMPDIR` has no 8.3 short names (`RUNNER~1`), so it compares equal to the same folder reached through `$HOME`.",
+     "script": "echo \"$TMPDIR\"", "check": lambda o, e, c, s: "~" not in text(o) and text(o).strip() != ""},
+    {"id": "errors-install-hint", "cat": "errors",
+     "why": "A missing program agents expect (`git`) says how to install it, not only \"command not found\".",
+     "script": "PATH=/c/Windows/System32; git --version 2>&1",
+     "check": lambda o, e, c, s: b"winget install" in o and b"Git.Git" in o},
+    {"id": "errors-syntax-in-bash-words", "cat": "errors",
+     "why": "A syntax error names its line and says what's missing as bash does (`unexpected EOF while looking for matching`).",
+     "script": "eval 'echo ok\necho \"unterminated'",
+     "check": lambda o, e, c, s: b"unexpected EOF while looking for matching" in e},
 
     # --- errors and identity -------------------------------------------------------------------------
     {"id": "err-not-found", "cat": "errors", "why": "A missing command: status 127 and bash's message shape.",
