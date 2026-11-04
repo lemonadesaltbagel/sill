@@ -16,6 +16,8 @@ cc=$host-gcc
 "$cc" -O2 -c "$here/third_party/gnu-tools/shim.c" -o "$work/shim.o"
 # Directory listings that a long 8.3 short name in UTF-8 doesn't break (findfile.c).
 "$cc" -O2 -c "$here/third_party/gnu-tools/findfile.c" -o "$work/findfile.o"
+# String comparison in byte order, not the system code page's (collate.c).
+"$cc" -O2 -c "$here/third_party/gnu-tools/collate.c" -o "$work/collate.o"
 # A UTF-8 active code page (third_party/gnu-tools/utf8.manifest): with the system code
 # page, `grep x 한국어.txt` failed to open the file on a Chinese system, and any CJK or
 # Cyrillic name on an English one.
@@ -38,7 +40,7 @@ build() { # name version sha256 "configure args" outputs...   (TARBALL_EXT, EXTR
         done
         # shellcheck disable=SC2086 # $extra is a list of configure arguments
         ./configure -q --host="$host" --disable-nls --enable-threads=windows $extra \
-            CFLAGS="$cflags ${EXTRA_CFLAGS:-}" LDFLAGS="-static -Wl,--wrap=main" LIBS="$work/shim.o $work/findfile.o $work/utf8.o -lbcrypt" >/dev/null
+            CFLAGS="$cflags ${EXTRA_CFLAGS:-}" LDFLAGS="-static -Wl,--wrap=main" LIBS="$work/shim.o $work/findfile.o $work/collate.o $work/utf8.o -lbcrypt" >/dev/null
         make -s -j"$(getconf _NPROCESSORS_ONLN)" >/dev/null
     )
     for exe in "$@"; do

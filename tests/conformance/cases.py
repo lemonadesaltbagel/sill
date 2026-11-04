@@ -137,10 +137,10 @@ CASES = [
      "script": "n=0; while read -r l; do n=$((n+1)); done < f; echo $n", "expect": "3\n"},
     {"id": "enc-gnu-tools-short-names", "cat": "encoding",
      "why": "make, `grep -r` and `diff -r` read a folder holding names whose 8.3 short name is long in UTF-8 "
-            "(`文件 ü.txt`), instead of stopping with \"Invalid argument\".",
+            "(`文件 ü.txt`), or that the system code page can't hold (`€` in GBK), without \"Invalid argument\".",
      "files": {"文件 ü.txt": "x\n", "ファイル ü.txt": "x\n", "文件 €.txt": "x\n", "Makefile": "all:\n\t@echo made\n"},
      "script": "make && grep -rl x . && diff -rq . . && echo same",
-     "check": lambda o, e, c, s: c == 0 and text(o).startswith("made\n") and text(o).endswith("same\n")
+     "check": lambda o, e, c, s: c == 0 and e.strip() == b"" and text(o).startswith("made\n") and text(o).endswith("same\n")
                                  and all(n in text(o) for n in ["文件 ü.txt", "ファイル ü.txt", "文件 €.txt"])},
 
     # --- line endings: bytes in, bytes out ---------------------------------------------------------
