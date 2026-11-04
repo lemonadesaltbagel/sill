@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.4 (2026-11-04)
 
 ### Fixes
 - **`diff -r` on a Chinese-locale system printed "cannot compare file names ... Invalid argument"** for a folder holding a name the system code page can't hold (`文件 €.txt` in GBK): the GNU tools compared names in that code page though they're UTF-8. They compare in byte order now (UTF-8 code point order, as in the C locale), and make's case-insensitive name comparison likewise (`third_party/gnu-tools/collate.c`).
