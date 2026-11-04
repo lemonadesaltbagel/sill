@@ -21,22 +21,22 @@ Measured on Windows with the Git Bash that ships with Git for Windows (and, for 
 
 ### Where Windows gets in the way, sill holds up
 
-**Conformance suite:** 102 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server, with sill installed in a folder whose name has a space. sill passes **102/102** both ways; Git Bash passes 74.
+**Conformance suite:** 108 cases of what agents rely on, each with the reason it matters, run through `bash.exe -c` and through the MCP server, with sill installed in a folder whose name has a space. sill passes **108/108** both ways; Git Bash passes 78.
 
 | area | cases | sill | Git Bash |
 |---|---|---|---|
-| Encoding (non-English text through pipes, file names, git paths, `$(...)` of legacy output) | 10 | **10** | 4 |
+| Encoding (non-English text through pipes, file names, git paths, `$(...)` of legacy output) | 11 | **11** | 5 |
 | Arguments to native programs (`*`, quotes, `/` switches, `.bat`) | 13 | **13** | 10 |
-| Tools agents use (`rg`, `ps`, `pgrep`, `make`, `jq`, ...) | 15 | **15** | 12 |
+| Tools agents use (`rg`, `ps`, `pgrep`, `make`, `jq`, `uname`, `stat`, ...) | 17 | **17** | 14 |
 | Processes (background jobs, `kill`, `pkill`, `disown`) | 12 | **12** | 10 |
 | Line endings and bytes | 5 | **5** | 3 |
 | Size limits (long scripts, thousands of arguments) | 4 | **4** | 3 |
 | Running scripts (`#!`, `cmd /c NAME.bat`, CRLF files, traps in subshells and functions) | 10 | **10** | 7 |
 | Programs that prompt (`git commit` with no message, `vi`, pagers) | 4 | **4** | 1 |
 | Look-alikes (inputs sill's rules must leave alone) | 12 | **12** | 7 |
-| Paths, files, errors | 17 | **17** | 17 |
+| Paths, files, errors (install hints, syntax errors in bash's words) | 20 | **20** | 18 |
 
-In a Chinese-locale Windows container (code page 936, no Git on the machine), sill passes **100/100** of the cases that apply there, also with a windowless console; Git Bash passes 69.
+In a Chinese-locale Windows container (code page 936, no Git on the machine), sill passes **106/106** of the cases that apply there, also with a windowless console; Git Bash passes 72.
 
 **Real agents, fewer failed commands:** 18 tasks with automatic checks (a Makefile project, an npm dev server started and stopped, Unicode paths, a `.bat` with `%` arguments, 4,000 files, an MSVC build), DeepSeek's low-cost model, two runs per task on the Chinese-locale laptop:
 
