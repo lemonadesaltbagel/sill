@@ -203,15 +203,17 @@ fn find(hay: &[String], needle: &[String], from: usize, at_eof: bool) -> Option<
         |a, b| a.trim_end() == b.trim_end(),
         |a, b| a.trim() == b.trim(),
     ];
-    if at_eof && hay.len() >= needle.len() {
-        let at = hay.len() - needle.len();
-        if at >= from {
-            for eq in tests {
-                if find_with(hay, needle, at, eq) == Some(at) {
-                    return Some(at);
-                }
-            }
+    if at_eof {
+        // `*** End of File` is a constraint, not a hint: the hunk's lines must be the last
+        // lines of the file (and still at or after the previous hunk's end). Falling back
+        // to a normal search here would apply the hunk to an earlier identical block.
+        let at = hay.len().checked_sub(needle.len())?;
+        if at < from {
+            return None;
         }
+        return tests
+            .into_iter()
+            .find_map(|eq| (find_with(hay, needle, at, eq) == Some(at)).then_some(at));
     }
     tests
         .into_iter()
@@ -504,6 +506,20 @@ mod tests {
         let h =
             hunks("*** Begin Patch\n*** Update File: f\n@@\n+c\n*** End of File\n*** End Patch");
         assert_eq!(apply_hunks("f", "a\nb\n", &h).unwrap(), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn end_of_file_marker_requires_the_end() {
+        let h =
+            hunks("*** Begin Patch\n*** Update File: f\n-b\n+B\n*** End of File\n*** End Patch");
+        assert_eq!(apply_hunks("f", "a\nb\n", &h).unwrap(), "a\nB\n");
+
+        let h =
+            hunks("*** Begin Patch\n*** Update File: f\n-a\n+x\n*** End of File\n*** End Patch");
+        assert!(
+            apply_hunks("f", "a\nb\n", &h).is_err(),
+            "`*** End of File` must not match line 1"
+        );
     }
 
     #[test]
